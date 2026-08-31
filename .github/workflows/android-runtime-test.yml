@@ -79,6 +79,8 @@ jobs:
             api_name: "12"
 
     env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       AVD_NAME: runtime-api-${{ matrix.api }}
       SYSTEM_IMAGE: system-images;android-${{ matrix.api }};google_apis;x86_64
       EMULATOR_SERIAL: emulator-5554
