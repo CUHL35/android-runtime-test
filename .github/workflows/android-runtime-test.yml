@@ -80,8 +80,9 @@ jobs:
 
     env:
       HOST_ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      ANDROID_HOME: /home/runner/.android-runtime-sdk
-      ANDROID_SDK_ROOT: /home/runner/.android-runtime-sdk
+      RUNTIME_SDK_ROOT: /home/runner/.android-runtime-sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       AVD_NAME: runtime-api-${{ matrix.api }}
       SYSTEM_IMAGE: system-images;android-${{ matrix.api }};google_apis;x86_64
       EMULATOR_SERIAL: emulator-5554
@@ -117,11 +118,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
+            ~/.android-runtime-sdk/platform-tools
             ~/.android-runtime-sdk/emulator
+            ~/.android-runtime-sdk/cmdline-tools/latest
             ~/.android-runtime-sdk/system-images/android-${{ matrix.api }}/google_apis/x86_64
             ~/.android/avd/runtime-api-${{ matrix.api }}.avd
             ~/.android/avd/runtime-api-${{ matrix.api }}.ini
-          key: android-avd-snapshot-v2-${{ runner.os }}-${{ runner.arch }}-api${{ matrix.api }}-google-apis-x86_64
+          key: android-avd-snapshot-v3-${{ runner.os }}-${{ runner.arch }}-api${{ matrix.api }}-google-apis-x86_64
 
       - name: Report AVD cache result
         env:
@@ -129,35 +132,41 @@ jobs:
         run: |
           set -euxo pipefail
           echo "cache-hit=$AVD_CACHE_HIT"
+          if [ -f runtime-tests/require-cache-hit ]; then
+            test "$AVD_CACHE_HIT" = "true"
+          fi
 
-      - name: Install system image for cache creation only
+      - name: Set up JDK 17 for cache creation only
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android command-line tools for cache creation only
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK and system image for cache creation only
         if: steps.avd-cache.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
-          command -v java
-          java -version
-          test -x "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          mkdir -p "$ANDROID_SDK_ROOT"
-          yes | "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null || true
-          "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --install "$SYSTEM_IMAGE"
-          test -x "$ANDROID_SDK_ROOT/emulator/emulator"
-          test -f "$ANDROID_SDK_ROOT/system-images/android-${{ matrix.api }}/google_apis/x86_64/package.xml"
-
-      - name: Expose Android runtime tools
-        run: |
-          set -euxo pipefail
-          echo "$HOST_ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/emulator" >> "$GITHUB_PATH"
-          echo "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          test -x "$HOST_ANDROID_SDK_ROOT/platform-tools/adb"
-          test -x "$ANDROID_SDK_ROOT/emulator/emulator"
-          test -x "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager"
-          test -x "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install "platform-tools" "emulator" "platforms;android-${{ matrix.api }}" "$SYSTEM_IMAGE"
+          export PATH="$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          command -v adb
+          command -v emulator
+          command -v avdmanager
+          command -v sdkmanager
+          adb version
+          emulator -version
+          sdkmanager --list_installed
 
       - name: Create AVD and clean boot snapshot on cache miss
         if: steps.avd-cache.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
+          export PATH="$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           rm -rf "$HOME/.android/avd/$AVD_NAME.avd" "$HOME/.android/avd/$AVD_NAME.ini"
           echo "no" | avdmanager create avd --force --name "$AVD_NAME" --package "$SYSTEM_IMAGE" --device "pixel_2"
           test "$(emulator -list-avds | grep -Fx "$AVD_NAME")" = "$AVD_NAME"
@@ -188,6 +197,36 @@ jobs:
             fi
             sleep 1
           done
+
+      - name: Stage Android runtime cache on cache miss
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          rm -rf "$RUNTIME_SDK_ROOT"
+          mkdir -p "$RUNTIME_SDK_ROOT/cmdline-tools"
+          mkdir -p "$RUNTIME_SDK_ROOT/system-images/android-${{ matrix.api }}/google_apis"
+          cp -a "$HOST_ANDROID_SDK_ROOT/platform-tools" "$RUNTIME_SDK_ROOT/platform-tools"
+          cp -a "$HOST_ANDROID_SDK_ROOT/emulator" "$RUNTIME_SDK_ROOT/emulator"
+          cp -a "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest" "$RUNTIME_SDK_ROOT/cmdline-tools/latest"
+          cp -a "$HOST_ANDROID_SDK_ROOT/system-images/android-${{ matrix.api }}/google_apis/x86_64" "$RUNTIME_SDK_ROOT/system-images/android-${{ matrix.api }}/google_apis/x86_64"
+          test -x "$RUNTIME_SDK_ROOT/platform-tools/adb"
+          test -x "$RUNTIME_SDK_ROOT/emulator/emulator"
+          test -x "$RUNTIME_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"
+          test -f "$RUNTIME_SDK_ROOT/system-images/android-${{ matrix.api }}/google_apis/x86_64/package.xml"
+
+      - name: Expose cached Android runtime tools
+        run: |
+          set -euxo pipefail
+          echo "$RUNTIME_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          echo "$RUNTIME_SDK_ROOT/emulator" >> "$GITHUB_PATH"
+          echo "$RUNTIME_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "ANDROID_HOME=$RUNTIME_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$RUNTIME_SDK_ROOT" >> "$GITHUB_ENV"
+          test -x "$RUNTIME_SDK_ROOT/platform-tools/adb"
+          test -x "$RUNTIME_SDK_ROOT/emulator/emulator"
+          test -x "$RUNTIME_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"
+          test -f "$RUNTIME_SDK_ROOT/system-images/android-${{ matrix.api }}/google_apis/x86_64/package.xml"
+          test -d "$HOME/.android/avd/$AVD_NAME.avd/snapshots/clean-boot"
 
       - name: Boot cached snapshot and verify adb
         env:
