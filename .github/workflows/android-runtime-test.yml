@@ -117,6 +117,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
+            ~/.android-runtime-sdk/emulator
             ~/.android-runtime-sdk/system-images/android-${{ matrix.api }}/google_apis/x86_64
             ~/.android/avd/runtime-api-${{ matrix.api }}.avd
             ~/.android/avd/runtime-api-${{ matrix.api }}.ini
@@ -139,16 +140,17 @@ jobs:
           mkdir -p "$ANDROID_SDK_ROOT"
           yes | "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null || true
           "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --install "$SYSTEM_IMAGE"
+          test -x "$ANDROID_SDK_ROOT/emulator/emulator"
           test -f "$ANDROID_SDK_ROOT/system-images/android-${{ matrix.api }}/google_apis/x86_64/package.xml"
 
       - name: Expose Android runtime tools
         run: |
           set -euxo pipefail
           echo "$HOST_ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          echo "$HOST_ANDROID_SDK_ROOT/emulator" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/emulator" >> "$GITHUB_PATH"
           echo "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           test -x "$HOST_ANDROID_SDK_ROOT/platform-tools/adb"
-          test -x "$HOST_ANDROID_SDK_ROOT/emulator/emulator"
+          test -x "$ANDROID_SDK_ROOT/emulator/emulator"
           test -x "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager"
           test -x "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"
 
