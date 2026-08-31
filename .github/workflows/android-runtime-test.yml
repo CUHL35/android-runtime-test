@@ -99,6 +99,12 @@ jobs:
           sudo chmod 666 /dev/kvm
           ls -l /dev/kvm
 
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Set up Android command-line tools
         uses: android-actions/setup-android@v3
 
@@ -235,11 +241,11 @@ jobs:
         if: always()
         run: |
           set +e
-          adb devices -l
-          adb -s "${EMULATOR_SERIAL}" shell getprop sys.boot_completed
-          adb -s "${EMULATOR_SERIAL}" shell getprop ro.build.version.sdk
-          adb -s "${EMULATOR_SERIAL}" logcat -d -v threadtime > "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt"
-          tail -n 300 "${RUNNER_TEMP}/emulator-api-${{ matrix.api }}.log"
+          adb devices -l || true
+          adb -s "${EMULATOR_SERIAL}" shell getprop sys.boot_completed || true
+          adb -s "${EMULATOR_SERIAL}" shell getprop ro.build.version.sdk || true
+          adb -s "${EMULATOR_SERIAL}" logcat -d -v threadtime > "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt" || true
+          tail -n 300 "${RUNNER_TEMP}/emulator-api-${{ matrix.api }}.log" || true
 
       - name: Upload runtime logs
         if: always()
