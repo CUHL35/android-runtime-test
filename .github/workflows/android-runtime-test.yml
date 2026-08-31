@@ -126,6 +126,14 @@ jobs:
             test "$AVD_CACHE_HIT" = "true"
           fi
 
+      - name: Free disk space for cache creation only
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          df -h /
+
       - name: Set up JDK 17 for cache creation only
         if: steps.avd-cache.outputs.cache-hit != 'true'
         uses: actions/setup-java@v4
@@ -176,7 +184,7 @@ jobs:
           echo $! > "$RUNNER_TEMP/snapshot-emulator.pid"
 
           snapshot_boot_completed=""
-          for attempt in $(seq 1 180); do
+          for attempt in $(seq 1 300); do
             if adb -s "$EMULATOR_SERIAL" get-state 2>/dev/null | grep -qx device; then
               snapshot_boot_completed="$(adb -s "$EMULATOR_SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
               if [ "$snapshot_boot_completed" = "1" ]; then
@@ -323,6 +331,19 @@ jobs:
           timeout 10s adb -s "${EMULATOR_SERIAL}" shell getprop ro.build.version.sdk || true
           timeout 10s adb -s "${EMULATOR_SERIAL}" logcat -d -v threadtime > "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt" || true
           tail -n 300 "${RUNNER_TEMP}/emulator-api-${{ matrix.api }}.log" || true
+
+      - name: Stop emulator before cache archive
+        if: always()
+        run: |
+          set +e
+          timeout 10s adb -s "${EMULATOR_SERIAL}" emu kill || true
+          if [ -f "${RUNNER_TEMP}/emulator.pid" ]; then
+            timeout 30s tail --pid="$(cat "${RUNNER_TEMP}/emulator.pid")" -f /dev/null || true
+          fi
+          if [ -f "${RUNNER_TEMP}/snapshot-emulator.pid" ]; then
+            timeout 30s tail --pid="$(cat "${RUNNER_TEMP}/snapshot-emulator.pid")" -f /dev/null || true
+          fi
+          sync
 
       - name: Upload runtime logs
         if: always()
