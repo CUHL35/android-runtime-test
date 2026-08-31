@@ -1,0 +1,253 @@
+name: Android Runtime Test
+
+on:
+  push:
+    branches:
+      - codex/android-runtime-test
+    paths:
+      - ".github/workflows/android-runtime-test.yml"
+      - "runtime-tests/**"
+  workflow_dispatch:
+    inputs:
+      apk_artifact_name:
+        description: "Optional APK artifact name from this workflow run"
+        required: false
+        type: string
+      apk_path:
+        description: "Optional APK path in the repo or downloaded artifact"
+        required: false
+        type: string
+      package_name:
+        description: "Optional package override; inferred from APK when omitted"
+        required: false
+        type: string
+      launch_component:
+        description: "Optional activity component, for example com.example/.MainActivity"
+        required: false
+        type: string
+      functional_test_script:
+        description: "Optional repo-relative shell script executed after launch"
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      apk_artifact_name:
+        description: "Optional APK artifact name from the caller run"
+        required: false
+        type: string
+        default: ""
+      apk_path:
+        description: "Optional APK path in the repo or downloaded artifact"
+        required: false
+        type: string
+        default: ""
+      package_name:
+        description: "Optional package override; inferred from APK when omitted"
+        required: false
+        type: string
+        default: ""
+      launch_component:
+        description: "Optional activity component"
+        required: false
+        type: string
+        default: ""
+      functional_test_script:
+        description: "Optional repo-relative shell script executed after launch"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-runtime-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    name: Android ${{ matrix.api_name }} / API ${{ matrix.api }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 30
+            api_name: "11"
+          - api: 31
+            api_name: "12"
+
+    env:
+      AVD_NAME: runtime-api-${{ matrix.api }}
+      SYSTEM_IMAGE: system-images;android-${{ matrix.api }};google_apis;x86_64
+      EMULATOR_SERIAL: emulator-5554
+      APK_ARTIFACT_NAME: ${{ inputs.apk_artifact_name || '' }}
+      APK_INPUT_PATH: ${{ inputs.apk_path || '' }}
+      PACKAGE_INPUT: ${{ inputs.package_name || '' }}
+      LAUNCH_COMPONENT: ${{ inputs.launch_component || '' }}
+      FUNCTIONAL_TEST_SCRIPT: ${{ inputs.functional_test_script || '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          set -euxo pipefail
+          test -e /dev/kvm
+          sudo chmod 666 /dev/kvm
+          ls -l /dev/kvm
+
+      - name: Set up Android command-line tools
+        uses: android-actions/setup-android@v3
+
+      - name: Accept licenses and install complete emulator SDK
+        run: |
+          set -euxo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install             "platform-tools"             "emulator"             "platforms;android-${{ matrix.api }}"             "${SYSTEM_IMAGE}"
+          command -v adb
+          command -v emulator
+          command -v avdmanager
+          command -v sdkmanager
+          adb version
+          emulator -version
+          sdkmanager --list_installed
+
+      - name: Create API ${{ matrix.api }} AVD
+        run: |
+          set -euxo pipefail
+          rm -rf "${HOME}/.android/avd/${AVD_NAME}.avd" "${HOME}/.android/avd/${AVD_NAME}.ini"
+          echo "no" | avdmanager create avd             --force             --name "${AVD_NAME}"             --package "${SYSTEM_IMAGE}"             --device "pixel_2"
+          emulator -list-avds
+          test "$(emulator -list-avds | grep -Fx "${AVD_NAME}")" = "${AVD_NAME}"
+
+      - name: Boot emulator and verify adb
+        run: |
+          set -euxo pipefail
+          adb start-server
+          nohup emulator "@${AVD_NAME}"             -no-window             -no-audio             -no-boot-anim             -no-snapshot             -gpu swiftshader_indirect             -camera-back none             -camera-front none             > "${RUNNER_TEMP}/emulator-api-${{ matrix.api }}.log" 2>&1 &
+          echo $! > "${RUNNER_TEMP}/emulator.pid"
+
+          boot_completed=""
+          for attempt in $(seq 1 180); do
+            adb devices -l
+            if adb -s "${EMULATOR_SERIAL}" get-state 2>/dev/null | grep -qx device; then
+              boot_completed="$(adb -s "${EMULATOR_SERIAL}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+              if [ "${boot_completed}" = "1" ]; then
+                break
+              fi
+            fi
+            sleep 2
+          done
+
+          adb devices -l
+          test "${boot_completed}" = "1"
+          actual_api="$(adb -s "${EMULATOR_SERIAL}" shell getprop ro.build.version.sdk | tr -d '\r')"
+          android_release="$(adb -s "${EMULATOR_SERIAL}" shell getprop ro.build.version.release | tr -d '\r')"
+          test "${actual_api}" = "${{ matrix.api }}"
+          echo "sys.boot_completed=${boot_completed}"
+          echo "API level=${actual_api}"
+          echo "Android release=${android_release}"
+          adb -s "${EMULATOR_SERIAL}" shell input keyevent 82
+
+      - name: Download APK artifact
+        if: ${{ inputs.apk_artifact_name != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.apk_artifact_name }}
+          path: .runtime-apk
+
+      - name: Resolve APK
+        id: apk
+        if: ${{ inputs.apk_artifact_name != '' || inputs.apk_path != '' }}
+        run: |
+          set -euo pipefail
+          candidates=()
+          if [ -n "${APK_INPUT_PATH}" ]; then
+            if [[ "${APK_INPUT_PATH}" = /* ]]; then
+              candidates+=("${APK_INPUT_PATH}")
+            else
+              candidates+=("${GITHUB_WORKSPACE}/${APK_INPUT_PATH}")
+              candidates+=("${GITHUB_WORKSPACE}/.runtime-apk/${APK_INPUT_PATH}")
+            fi
+          else
+            while IFS= read -r file; do candidates+=("${file}"); done < <(find "${GITHUB_WORKSPACE}/.runtime-apk" -type f -name "*.apk" | sort)
+          fi
+
+          apk_file=""
+          for candidate in "${candidates[@]}"; do
+            if [ -f "${candidate}" ]; then
+              if [ -n "${apk_file}" ]; then
+                echo "More than one APK matched; set apk_path explicitly." >&2
+                exit 1
+              fi
+              apk_file="${candidate}"
+            fi
+          done
+          test -n "${apk_file}"
+          echo "apk_file=${apk_file}" >> "${GITHUB_OUTPUT}"
+          sha256sum "${apk_file}"
+
+      - name: Install, launch, and run functional test
+        if: ${{ steps.apk.outputs.apk_file != '' }}
+        env:
+          APK_FILE: ${{ steps.apk.outputs.apk_file }}
+        run: |
+          set -euxo pipefail
+          package_name="${PACKAGE_INPUT}"
+          if [ -z "${package_name}" ]; then
+            package_name="$(apkanalyzer manifest application-id "${APK_FILE}")"
+          fi
+          test -n "${package_name}"
+
+          adb -s "${EMULATOR_SERIAL}" logcat -c
+          adb -s "${EMULATOR_SERIAL}" install -r -t "${APK_FILE}"
+          adb -s "${EMULATOR_SERIAL}" shell pm path "${package_name}" | grep -q "^package:"
+
+          if [ -n "${LAUNCH_COMPONENT}" ]; then
+            adb -s "${EMULATOR_SERIAL}" shell am start -W -n "${LAUNCH_COMPONENT}"
+          else
+            launch_output="$(adb -s "${EMULATOR_SERIAL}" shell monkey -p "${package_name}" -c android.intent.category.LAUNCHER 1 2>&1)"
+            echo "${launch_output}"
+            grep -q "Events injected: 1" <<<"${launch_output}"
+          fi
+
+          sleep 5
+          if [ -n "${FUNCTIONAL_TEST_SCRIPT}" ]; then
+            script_path="$(realpath -m "${GITHUB_WORKSPACE}/${FUNCTIONAL_TEST_SCRIPT}")"
+            case "${script_path}" in
+              "${GITHUB_WORKSPACE}"/*) ;;
+              *) echo "functional_test_script must stay inside the repository" >&2; exit 1 ;;
+            esac
+            test -f "${script_path}"
+            DEVICE_SERIAL="${EMULATOR_SERIAL}"             API_LEVEL="${{ matrix.api }}"             APK_PATH="${APK_FILE}"             PACKAGE_NAME="${package_name}"               bash "${script_path}"
+          fi
+
+          adb -s "${EMULATOR_SERIAL}" logcat -d -v threadtime > "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt"
+          if grep -E "FATAL EXCEPTION|ANR in ${package_name}|SecurityException.*${package_name}" "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt"; then
+            echo "Serious runtime error found in logcat." >&2
+            exit 1
+          fi
+
+      - name: Capture diagnostics
+        if: always()
+        run: |
+          set +e
+          adb devices -l
+          adb -s "${EMULATOR_SERIAL}" shell getprop sys.boot_completed
+          adb -s "${EMULATOR_SERIAL}" shell getprop ro.build.version.sdk
+          adb -s "${EMULATOR_SERIAL}" logcat -d -v threadtime > "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt"
+          tail -n 300 "${RUNNER_TEMP}/emulator-api-${{ matrix.api }}.log"
+
+      - name: Upload runtime logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-runtime-logs-api-${{ matrix.api }}
+          path: |
+            ${{ runner.temp }}/emulator-api-${{ matrix.api }}.log
+            ${{ runner.temp }}/logcat-api-${{ matrix.api }}.txt
+          if-no-files-found: warn
+          retention-days: 14
