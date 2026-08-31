@@ -92,62 +92,126 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Enable KVM
+      - name: Enable KVM and install emulator host dependency
         run: |
           set -euxo pipefail
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
           ls -l /dev/kvm
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libpulse0
 
-      - name: Set up JDK 17
+      - name: Restore cached API ${{ matrix.api }} AVD snapshot
+        id: avd-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/android/sdk/platform-tools
+            /usr/local/lib/android/sdk/emulator
+            /usr/local/lib/android/sdk/cmdline-tools
+            /usr/local/lib/android/sdk/platforms/android-${{ matrix.api }}
+            /usr/local/lib/android/sdk/system-images/android-${{ matrix.api }}
+            ~/.android/avd
+          key: android-avd-snapshot-v1-${{ runner.os }}-${{ runner.arch }}-api${{ matrix.api }}-google-apis-x86_64
+
+      - name: Report AVD cache result
+        env:
+          AVD_CACHE_HIT: ${{ steps.avd-cache.outputs.cache-hit }}
+        run: |
+          set -euxo pipefail
+          echo "cache-hit=$AVD_CACHE_HIT"
+          if [ -f runtime-tests/require-cache-hit ]; then
+            test "$AVD_CACHE_HIT" = "true"
+          fi
+
+      - name: Set up JDK 17 for cache creation only
+        if: steps.avd-cache.outputs.cache-hit != 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android command-line tools
+      - name: Set up Android command-line tools for cache creation only
+        if: steps.avd-cache.outputs.cache-hit != 'true'
         uses: android-actions/setup-android@v3
 
-      - name: Accept licenses and install complete emulator SDK
+      - name: Install SDK and system image for cache creation only
+        if: steps.avd-cache.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install             "platform-tools"             "emulator"             "platforms;android-${{ matrix.api }}"             "${SYSTEM_IMAGE}"
-          export PATH="${ANDROID_SDK_ROOT}/platform-tools:${ANDROID_SDK_ROOT}/emulator:${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${PATH}"
-          echo "${ANDROID_SDK_ROOT}/platform-tools" >> "${GITHUB_PATH}"
-          echo "${ANDROID_SDK_ROOT}/emulator" >> "${GITHUB_PATH}"
-          echo "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" >> "${GITHUB_PATH}"
+          sdkmanager --install "platform-tools" "emulator" "platforms;android-${{ matrix.api }}" "$SYSTEM_IMAGE"
+          export PATH="$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           command -v adb
           command -v emulator
           command -v avdmanager
           command -v sdkmanager
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends libpulse0
           adb version
           emulator -version
           sdkmanager --list_installed
 
-      - name: Create API ${{ matrix.api }} AVD
+      - name: Expose cached Android runtime tools
         run: |
           set -euxo pipefail
-          rm -rf "${HOME}/.android/avd/${AVD_NAME}.avd" "${HOME}/.android/avd/${AVD_NAME}.ini"
-          echo "no" | avdmanager create avd             --force             --name "${AVD_NAME}"             --package "${SYSTEM_IMAGE}"             --device "pixel_2"
-          emulator -list-avds
-          test "$(emulator -list-avds | grep -Fx "${AVD_NAME}")" = "${AVD_NAME}"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/emulator" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
+          test -x "$ANDROID_SDK_ROOT/emulator/emulator"
+          test -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"
 
-      - name: Boot emulator and verify adb
+      - name: Create AVD and clean boot snapshot on cache miss
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          export PATH="$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          rm -rf "$HOME/.android/avd/$AVD_NAME.avd" "$HOME/.android/avd/$AVD_NAME.ini"
+          echo "no" | avdmanager create avd --force --name "$AVD_NAME" --package "$SYSTEM_IMAGE" --device "pixel_2"
+          test "$(emulator -list-avds | grep -Fx "$AVD_NAME")" = "$AVD_NAME"
+
+          adb start-server
+          nohup emulator "@$AVD_NAME" -no-window -no-audio -no-boot-anim -no-snapshot-load -gpu swiftshader_indirect -camera-back none -camera-front none > "$RUNNER_TEMP/snapshot-build-api-${{ matrix.api }}.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/snapshot-emulator.pid"
+
+          snapshot_boot_completed=""
+          for attempt in $(seq 1 180); do
+            if adb -s "$EMULATOR_SERIAL" get-state 2>/dev/null | grep -qx device; then
+              snapshot_boot_completed="$(adb -s "$EMULATOR_SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+              if [ "$snapshot_boot_completed" = "1" ]; then
+                break
+              fi
+            fi
+            sleep 2
+          done
+          test "$snapshot_boot_completed" = "1"
+          adb -s "$EMULATOR_SERIAL" shell input keyevent 82
+          adb -s "$EMULATOR_SERIAL" emu avd snapshot save clean-boot
+          sleep 5
+          test -d "$HOME/.android/avd/$AVD_NAME.avd/snapshots/clean-boot"
+          adb -s "$EMULATOR_SERIAL" emu kill || true
+          for attempt in $(seq 1 30); do
+            if ! adb -s "$EMULATOR_SERIAL" get-state >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Boot cached snapshot and verify adb
+        env:
+          AVD_CACHE_HIT: ${{ steps.avd-cache.outputs.cache-hit }}
         run: |
           set -euxo pipefail
           adb start-server
-          nohup emulator "@${AVD_NAME}"             -no-window             -no-audio             -no-boot-anim             -no-snapshot             -gpu swiftshader_indirect             -camera-back none             -camera-front none             > "${RUNNER_TEMP}/emulator-api-${{ matrix.api }}.log" 2>&1 &
-          echo $! > "${RUNNER_TEMP}/emulator.pid"
+          test -d "$HOME/.android/avd/$AVD_NAME.avd/snapshots/clean-boot"
+          nohup emulator "@$AVD_NAME" -snapshot clean-boot -no-snapshot-save -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none > "$RUNNER_TEMP/emulator-api-${{ matrix.api }}.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/emulator.pid"
 
           boot_completed=""
           for attempt in $(seq 1 180); do
             adb devices -l
-            if adb -s "${EMULATOR_SERIAL}" get-state 2>/dev/null | grep -qx device; then
-              boot_completed="$(adb -s "${EMULATOR_SERIAL}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
-              if [ "${boot_completed}" = "1" ]; then
+            if adb -s "$EMULATOR_SERIAL" get-state 2>/dev/null | grep -qx device; then
+              boot_completed="$(adb -s "$EMULATOR_SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+              if [ "$boot_completed" = "1" ]; then
                 break
               fi
             fi
@@ -155,14 +219,19 @@ jobs:
           done
 
           adb devices -l
-          test "${boot_completed}" = "1"
-          actual_api="$(adb -s "${EMULATOR_SERIAL}" shell getprop ro.build.version.sdk | tr -d '\r')"
-          android_release="$(adb -s "${EMULATOR_SERIAL}" shell getprop ro.build.version.release | tr -d '\r')"
-          test "${actual_api}" = "${{ matrix.api }}"
-          echo "sys.boot_completed=${boot_completed}"
-          echo "API level=${actual_api}"
-          echo "Android release=${android_release}"
-          adb -s "${EMULATOR_SERIAL}" shell input keyevent 82
+          test "$boot_completed" = "1"
+          actual_api="$(adb -s "$EMULATOR_SERIAL" shell getprop ro.build.version.sdk | tr -d '\r')"
+          android_release="$(adb -s "$EMULATOR_SERIAL" shell getprop ro.build.version.release | tr -d '\r')"
+          test "$actual_api" = "${{ matrix.api }}"
+          if grep -Eiq "failed to load snapshot|cannot load snapshot|snapshot.*incompatible" "$RUNNER_TEMP/emulator-api-${{ matrix.api }}.log"; then
+            echo "Cached snapshot failed to load." >&2
+            exit 1
+          fi
+          echo "cache-hit=$AVD_CACHE_HIT"
+          echo "sys.boot_completed=$boot_completed"
+          echo "API level=$actual_api"
+          echo "Android release=$android_release"
+          adb -s "$EMULATOR_SERIAL" shell input keyevent 82
 
       - name: Download APK artifact
         if: ${{ inputs.apk_artifact_name != '' }}
