@@ -241,10 +241,10 @@ jobs:
         if: always()
         run: |
           set +e
-          adb devices -l || true
-          adb -s "${EMULATOR_SERIAL}" shell getprop sys.boot_completed || true
-          adb -s "${EMULATOR_SERIAL}" shell getprop ro.build.version.sdk || true
-          adb -s "${EMULATOR_SERIAL}" logcat -d -v threadtime > "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt" || true
+          timeout 10s adb devices -l || true
+          timeout 10s adb -s "${EMULATOR_SERIAL}" shell getprop sys.boot_completed || true
+          timeout 10s adb -s "${EMULATOR_SERIAL}" shell getprop ro.build.version.sdk || true
+          timeout 10s adb -s "${EMULATOR_SERIAL}" logcat -d -v threadtime > "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt" || true
           tail -n 300 "${RUNNER_TEMP}/emulator-api-${{ matrix.api }}.log" || true
 
       - name: Upload runtime logs
