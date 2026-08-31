@@ -79,8 +79,9 @@ jobs:
             api_name: "12"
 
     env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      HOST_ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: /home/runner/.android-runtime-sdk
+      ANDROID_SDK_ROOT: /home/runner/.android-runtime-sdk
       AVD_NAME: runtime-api-${{ matrix.api }}
       SYSTEM_IMAGE: system-images;android-${{ matrix.api }};google_apis;x86_64
       EMULATOR_SERIAL: emulator-5554
@@ -103,18 +104,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends libpulse0
 
+      - name: Free disk space for Android runtime cache
+        run: |
+          set -euxo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo rm -rf "$HOST_ANDROID_SDK_ROOT/ndk" "$HOST_ANDROID_SDK_ROOT/cmake"
+          df -h /
+
       - name: Restore cached API ${{ matrix.api }} AVD snapshot
         id: avd-cache
         uses: actions/cache@v4
         with:
           path: |
-            /usr/local/lib/android/sdk/platform-tools
-            /usr/local/lib/android/sdk/emulator
-            /usr/local/lib/android/sdk/cmdline-tools
-            /usr/local/lib/android/sdk/platforms/android-${{ matrix.api }}
-            /usr/local/lib/android/sdk/system-images/android-${{ matrix.api }}
-            ~/.android/avd
-          key: android-avd-snapshot-v1-${{ runner.os }}-${{ runner.arch }}-api${{ matrix.api }}-google-apis-x86_64
+            ~/.android-runtime-sdk/system-images/android-${{ matrix.api }}/google_apis/x86_64
+            ~/.android/avd/runtime-api-${{ matrix.api }}.avd
+            ~/.android/avd/runtime-api-${{ matrix.api }}.ini
+          key: android-avd-snapshot-v2-${{ runner.os }}-${{ runner.arch }}-api${{ matrix.api }}-google-apis-x86_64
 
       - name: Report AVD cache result
         env:
@@ -122,59 +128,34 @@ jobs:
         run: |
           set -euxo pipefail
           echo "cache-hit=$AVD_CACHE_HIT"
-          if [ -f runtime-tests/require-cache-hit ]; then
-            test "$AVD_CACHE_HIT" = "true"
-          fi
 
-      - name: Free disk space for cache creation only
+      - name: Install system image for cache creation only
         if: steps.avd-cache.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
-          df -h /
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
-          df -h /
+          command -v java
+          java -version
+          test -x "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          mkdir -p "$ANDROID_SDK_ROOT"
+          yes | "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null || true
+          "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --install "$SYSTEM_IMAGE"
+          test -f "$ANDROID_SDK_ROOT/system-images/android-${{ matrix.api }}/google_apis/x86_64/package.xml"
 
-      - name: Set up JDK 17 for cache creation only
-        if: steps.avd-cache.outputs.cache-hit != 'true'
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Set up Android command-line tools for cache creation only
-        if: steps.avd-cache.outputs.cache-hit != 'true'
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK and system image for cache creation only
-        if: steps.avd-cache.outputs.cache-hit != 'true'
+      - name: Expose Android runtime tools
         run: |
           set -euxo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install "platform-tools" "emulator" "platforms;android-${{ matrix.api }}" "$SYSTEM_IMAGE"
-          export PATH="$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-          command -v adb
-          command -v emulator
-          command -v avdmanager
-          command -v sdkmanager
-          adb version
-          emulator -version
-          sdkmanager --list_installed
-
-      - name: Expose cached Android runtime tools
-        run: |
-          set -euxo pipefail
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/emulator" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
-          test -x "$ANDROID_SDK_ROOT/emulator/emulator"
-          test -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"
+          echo "$HOST_ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          echo "$HOST_ANDROID_SDK_ROOT/emulator" >> "$GITHUB_PATH"
+          echo "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          test -x "$HOST_ANDROID_SDK_ROOT/platform-tools/adb"
+          test -x "$HOST_ANDROID_SDK_ROOT/emulator/emulator"
+          test -x "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager"
+          test -x "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"
 
       - name: Create AVD and clean boot snapshot on cache miss
         if: steps.avd-cache.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
-          export PATH="$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           rm -rf "$HOME/.android/avd/$AVD_NAME.avd" "$HOME/.android/avd/$AVD_NAME.ini"
           echo "no" | avdmanager create avd --force --name "$AVD_NAME" --package "$SYSTEM_IMAGE" --device "pixel_2"
           test "$(emulator -list-avds | grep -Fx "$AVD_NAME")" = "$AVD_NAME"
