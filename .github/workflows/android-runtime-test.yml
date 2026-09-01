@@ -113,42 +113,67 @@ jobs:
           sudo rm -rf "$HOST_ANDROID_SDK_ROOT/ndk" "$HOST_ANDROID_SDK_ROOT/cmake"
           df -h /
 
-      - name: Restore cached API ${{ matrix.api }} AVD snapshot
-        id: avd-cache
+      - name: Restore cached API ${{ matrix.api }} runtime tools
+        id: runtime-tools-cache
         uses: actions/cache@v4
         with:
           path: |
             ~/.android-runtime-sdk/platform-tools
             ~/.android-runtime-sdk/emulator
             ~/.android-runtime-sdk/cmdline-tools/latest
-            ~/.android-runtime-sdk/system-images/android-${{ matrix.api }}/google_apis/x86_64
+          key: android-runtime-tools-v4-${{ runner.os }}-${{ runner.arch }}-api${{ matrix.api }}
+
+      - name: Restore cached API ${{ matrix.api }} system image
+        id: system-image-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.android-runtime-sdk/system-images/android-${{ matrix.api }}/google_apis/x86_64
+          key: android-system-image-v4-${{ runner.os }}-${{ runner.arch }}-api${{ matrix.api }}-google-apis-x86_64
+
+      - name: Restore cached API ${{ matrix.api }} AVD snapshot
+        id: avd-cache
+        uses: actions/cache@v4
+        with:
+          path: |
             ~/.android/avd/runtime-api-${{ matrix.api }}.avd
             ~/.android/avd/runtime-api-${{ matrix.api }}.ini
-          key: android-avd-snapshot-v3-${{ runner.os }}-${{ runner.arch }}-api${{ matrix.api }}-google-apis-x86_64
+          key: android-avd-snapshot-v4-${{ runner.os }}-${{ runner.arch }}-api${{ matrix.api }}-google-apis-x86_64
 
-      - name: Report AVD cache result
+      - name: Report Android runtime cache result
+        id: cache-state
         env:
+          RUNTIME_TOOLS_CACHE_HIT: ${{ steps.runtime-tools-cache.outputs.cache-hit }}
+          SYSTEM_IMAGE_CACHE_HIT: ${{ steps.system-image-cache.outputs.cache-hit }}
           AVD_CACHE_HIT: ${{ steps.avd-cache.outputs.cache-hit }}
         run: |
           set -euxo pipefail
-          echo "cache-hit=$AVD_CACHE_HIT"
+          cache_ready=false
+          if [ "$RUNTIME_TOOLS_CACHE_HIT" = "true" ] && [ "$SYSTEM_IMAGE_CACHE_HIT" = "true" ] && [ "$AVD_CACHE_HIT" = "true" ]; then
+            cache_ready=true
+          fi
+          echo "runtime-tools-cache-hit=$RUNTIME_TOOLS_CACHE_HIT"
+          echo "system-image-cache-hit=$SYSTEM_IMAGE_CACHE_HIT"
+          echo "avd-cache-hit=$AVD_CACHE_HIT"
+          echo "cache-ready=$cache_ready"
+          echo "cache-ready=$cache_ready" >> "$GITHUB_OUTPUT"
           if [ -f runtime-tests/require-cache-hit ]; then
-            test "$AVD_CACHE_HIT" = "true"
+            grep -qx "Require exact v4 runtime cache hit for validation." runtime-tests/require-cache-hit
+            test "$cache_ready" = "true"
           fi
 
       - name: Set up JDK 17 for cache creation only
-        if: steps.avd-cache.outputs.cache-hit != 'true'
+        if: steps.cache-state.outputs.cache-ready != 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Android command-line tools for cache creation only
-        if: steps.avd-cache.outputs.cache-hit != 'true'
+        if: steps.cache-state.outputs.cache-ready != 'true'
         uses: android-actions/setup-android@v3
 
       - name: Install SDK and system image for cache creation only
-        if: steps.avd-cache.outputs.cache-hit != 'true'
+        if: steps.cache-state.outputs.cache-ready != 'true'
         run: |
           set -euxo pipefail
           yes | sdkmanager --licenses >/dev/null || true
@@ -163,7 +188,7 @@ jobs:
           sdkmanager --list_installed
 
       - name: Create AVD and clean boot snapshot on cache miss
-        if: steps.avd-cache.outputs.cache-hit != 'true'
+        if: steps.cache-state.outputs.cache-ready != 'true'
         run: |
           set -euxo pipefail
           export PATH="$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
@@ -199,7 +224,7 @@ jobs:
           done
 
       - name: Stage Android runtime cache on cache miss
-        if: steps.avd-cache.outputs.cache-hit != 'true'
+        if: steps.cache-state.outputs.cache-ready != 'true'
         run: |
           set -euxo pipefail
           rm -rf "$RUNTIME_SDK_ROOT"
@@ -230,7 +255,7 @@ jobs:
 
       - name: Boot cached snapshot and verify adb
         env:
-          AVD_CACHE_HIT: ${{ steps.avd-cache.outputs.cache-hit }}
+          AVD_CACHE_HIT: ${{ steps.cache-state.outputs.cache-ready }}
         run: |
           set -euxo pipefail
           adb start-server
