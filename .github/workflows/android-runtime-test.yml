@@ -263,7 +263,16 @@ jobs:
           echo "sys.boot_completed=$boot_completed"
           echo "API level=$actual_api"
           echo "Android release=$android_release"
-          adb -s "$EMULATOR_SERIAL" shell input keyevent 82
+
+          input_ready=""
+          for attempt in $(seq 1 30); do
+            if adb -s "$EMULATOR_SERIAL" shell input keyevent 82 >/dev/null 2>&1; then
+              input_ready="1"
+              break
+            fi
+            sleep 1
+          done
+          test "$input_ready" = "1"
 
       - name: Download APK artifact
         if: ${{ inputs.apk_artifact_name != '' }}
