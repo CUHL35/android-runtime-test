@@ -37,7 +37,7 @@ jobs:
           set -euxo pipefail
           rm -rf dummy
           mkdir -p dummy/app/src/main/java/vn/longdev/dummy
-          mkdir -p dummy/app/src/main
+          mkdir -p dummy/app/src/main/res/values
           cat > dummy/settings.gradle <<'EOF'
           pluginManagement {
               repositories {
@@ -93,7 +93,6 @@ jobs:
           cat > dummy/app/src/main/AndroidManifest.xml <<'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:theme="@style/AppTheme" /></manifest>
           EOF
-          mkdir -p dummy/app/src/main/res/values
           cat > dummy/app/src/main/res/values/styles.xml <<'EOF'
           <resources><style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar" /></resources>
           EOF
@@ -122,7 +121,27 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: fixx-v34-toolchain-pack
-          path: toolchain-pack/
+          name: fixx-v34-jdk17
+          path: toolchain-pack/jdk17-linux-x64.tar.gz
           retention-days: 1
           compression-level: 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixx-v34-android-sdk36
+          path: toolchain-pack/android-sdk36-buildtools36-linux-x64.tar.gz
+          retention-days: 1
+          compression-level: 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixx-v34-gradle95-cache
+          path: toolchain-pack/gradle95-offline-cache.tar.gz
+          retention-days: 1
+          compression-level: 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixx-v34-toolchain-sums
+          path: toolchain-pack/SHA256SUMS.txt
+          retention-days: 1
