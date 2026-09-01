@@ -1,0 +1,438 @@
+name: Android Runtime Test
+
+on:
+  push:
+    branches:
+      - codex/android-runtime-test
+    paths:
+      - ".github/workflows/android-runtime-test.yml"
+      - "runtime-tests/**"
+  workflow_dispatch:
+    inputs:
+      apk_artifact_name:
+        description: "Optional APK artifact name from this workflow run"
+        required: false
+        type: string
+      apk_path:
+        description: "Optional APK path in the repo or downloaded artifact"
+        required: false
+        type: string
+      package_name:
+        description: "Optional package override; inferred from APK when omitted"
+        required: false
+        type: string
+      launch_component:
+        description: "Optional activity component, for example com.example/.MainActivity"
+        required: false
+        type: string
+      functional_test_script:
+        description: "Optional repo-relative shell script executed after the default runtime profile"
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      apk_artifact_name:
+        description: "Optional APK artifact name from the caller run"
+        required: false
+        type: string
+        default: ""
+      apk_path:
+        description: "Optional APK path in the repo or downloaded artifact"
+        required: false
+        type: string
+        default: ""
+      package_name:
+        description: "Optional package override; inferred from APK when omitted"
+        required: false
+        type: string
+        default: ""
+      launch_component:
+        description: "Optional activity component"
+        required: false
+        type: string
+        default: ""
+      functional_test_script:
+        description: "Optional repo-relative shell script executed after the default runtime profile"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-runtime-${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    name: Android ${{ matrix.api_name }} / API ${{ matrix.api }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 30
+            api_name: "11"
+          - api: 31
+            api_name: "12"
+
+    env:
+      HOST_ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      RUNTIME_SDK_ROOT: /home/runner/.android-runtime-sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      AVD_NAME: runtime-api-${{ matrix.api }}
+      SYSTEM_IMAGE: system-images;android-${{ matrix.api }};google_apis;x86_64
+      EMULATOR_SERIAL: emulator-5554
+      APK_ARTIFACT_NAME: ${{ inputs.apk_artifact_name || '' }}
+      APK_INPUT_PATH: ${{ inputs.apk_path || '' }}
+      PACKAGE_INPUT: ${{ inputs.package_name || '' }}
+      LAUNCH_COMPONENT: ${{ inputs.launch_component || '' }}
+      FUNCTIONAL_TEST_SCRIPT: ${{ inputs.functional_test_script || '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable KVM and install emulator host dependency
+        run: |
+          set -euxo pipefail
+          test -e /dev/kvm
+          sudo chmod 666 /dev/kvm
+          ls -l /dev/kvm
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libpulse0
+
+      - name: Free disk space for Android runtime cache
+        run: |
+          set -euxo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo rm -rf "$HOST_ANDROID_SDK_ROOT/ndk" "$HOST_ANDROID_SDK_ROOT/cmake"
+          df -h /
+
+      - name: Restore cached API ${{ matrix.api }} runtime tools
+        id: runtime-tools-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.android-runtime-sdk/platform-tools
+            ~/.android-runtime-sdk/emulator
+            ~/.android-runtime-sdk/cmdline-tools/latest
+          key: android-runtime-tools-v4-${{ runner.os }}-${{ runner.arch }}-api${{ matrix.api }}
+
+      - name: Restore cached API ${{ matrix.api }} system image
+        id: system-image-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.android-runtime-sdk/system-images/android-${{ matrix.api }}/google_apis/x86_64
+          key: android-system-image-v4-${{ runner.os }}-${{ runner.arch }}-api${{ matrix.api }}-google-apis-x86_64
+
+      - name: Restore cached API ${{ matrix.api }} AVD snapshot
+        id: avd-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.android/avd/runtime-api-${{ matrix.api }}.avd
+            ~/.android/avd/runtime-api-${{ matrix.api }}.ini
+          key: android-avd-snapshot-v4-${{ runner.os }}-${{ runner.arch }}-api${{ matrix.api }}-google-apis-x86_64
+
+      - name: Report Android runtime cache result
+        id: cache-state
+        env:
+          RUNTIME_TOOLS_CACHE_HIT: ${{ steps.runtime-tools-cache.outputs.cache-hit }}
+          SYSTEM_IMAGE_CACHE_HIT: ${{ steps.system-image-cache.outputs.cache-hit }}
+          AVD_CACHE_HIT: ${{ steps.avd-cache.outputs.cache-hit }}
+        run: |
+          set -euxo pipefail
+          cache_ready=false
+          if [ "$RUNTIME_TOOLS_CACHE_HIT" = "true" ] && [ "$SYSTEM_IMAGE_CACHE_HIT" = "true" ] && [ "$AVD_CACHE_HIT" = "true" ]; then
+            cache_ready=true
+          fi
+          echo "runtime-tools-cache-hit=$RUNTIME_TOOLS_CACHE_HIT"
+          echo "system-image-cache-hit=$SYSTEM_IMAGE_CACHE_HIT"
+          echo "avd-cache-hit=$AVD_CACHE_HIT"
+          echo "cache-ready=$cache_ready"
+          echo "cache-ready=$cache_ready" >> "$GITHUB_OUTPUT"
+          if [ -f runtime-tests/require-cache-hit ]; then
+            grep -qx "Require exact v4 runtime cache hit for validation." runtime-tests/require-cache-hit
+            test "$cache_ready" = "true"
+          fi
+
+      - name: Set up JDK 17 for cache creation only
+        if: steps.cache-state.outputs.cache-ready != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android command-line tools for cache creation only
+        if: steps.cache-state.outputs.cache-ready != 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK and system image for cache creation only
+        if: steps.cache-state.outputs.cache-ready != 'true'
+        run: |
+          set -euxo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install "platform-tools" "emulator" "platforms;android-${{ matrix.api }}" "$SYSTEM_IMAGE"
+          export PATH="$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          command -v adb
+          command -v emulator
+          command -v avdmanager
+          command -v sdkmanager
+          adb version
+          emulator -version
+          sdkmanager --list_installed
+
+      - name: Create AVD and clean boot snapshot on cache miss
+        if: steps.cache-state.outputs.cache-ready != 'true'
+        run: |
+          set -euxo pipefail
+          export PATH="$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          rm -rf "$HOME/.android/avd/$AVD_NAME.avd" "$HOME/.android/avd/$AVD_NAME.ini"
+          echo "no" | avdmanager create avd --force --name "$AVD_NAME" --package "$SYSTEM_IMAGE" --device "pixel_2"
+          test "$(emulator -list-avds | grep -Fx "$AVD_NAME")" = "$AVD_NAME"
+
+          adb start-server
+          nohup emulator "@$AVD_NAME" -no-window -no-audio -no-boot-anim -no-snapshot-load -gpu swiftshader_indirect -camera-back none -camera-front none > "$RUNNER_TEMP/snapshot-build-api-${{ matrix.api }}.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/snapshot-emulator.pid"
+
+          snapshot_boot_completed=""
+          for attempt in $(seq 1 300); do
+            if adb -s "$EMULATOR_SERIAL" get-state 2>/dev/null | grep -qx device; then
+              snapshot_boot_completed="$(adb -s "$EMULATOR_SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+              if [ "$snapshot_boot_completed" = "1" ]; then
+                break
+              fi
+            fi
+            sleep 2
+          done
+          test "$snapshot_boot_completed" = "1"
+          adb -s "$EMULATOR_SERIAL" shell input keyevent 82
+          adb -s "$EMULATOR_SERIAL" emu avd snapshot save clean-boot
+          sleep 5
+          test -d "$HOME/.android/avd/$AVD_NAME.avd/snapshots/clean-boot"
+          adb -s "$EMULATOR_SERIAL" emu kill || true
+          for attempt in $(seq 1 30); do
+            if ! adb -s "$EMULATOR_SERIAL" get-state >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Stage Android runtime cache on cache miss
+        if: steps.cache-state.outputs.cache-ready != 'true'
+        run: |
+          set -euxo pipefail
+          rm -rf "$RUNTIME_SDK_ROOT"
+          mkdir -p "$RUNTIME_SDK_ROOT/cmdline-tools"
+          mkdir -p "$RUNTIME_SDK_ROOT/system-images/android-${{ matrix.api }}/google_apis"
+          cp -a "$HOST_ANDROID_SDK_ROOT/platform-tools" "$RUNTIME_SDK_ROOT/platform-tools"
+          cp -a "$HOST_ANDROID_SDK_ROOT/emulator" "$RUNTIME_SDK_ROOT/emulator"
+          cp -a "$HOST_ANDROID_SDK_ROOT/cmdline-tools/latest" "$RUNTIME_SDK_ROOT/cmdline-tools/latest"
+          cp -a "$HOST_ANDROID_SDK_ROOT/system-images/android-${{ matrix.api }}/google_apis/x86_64" "$RUNTIME_SDK_ROOT/system-images/android-${{ matrix.api }}/google_apis/x86_64"
+          test -x "$RUNTIME_SDK_ROOT/platform-tools/adb"
+          test -x "$RUNTIME_SDK_ROOT/emulator/emulator"
+          test -x "$RUNTIME_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"
+          test -f "$RUNTIME_SDK_ROOT/system-images/android-${{ matrix.api }}/google_apis/x86_64/package.xml"
+
+      - name: Expose cached Android runtime tools
+        run: |
+          set -euxo pipefail
+          echo "$RUNTIME_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          echo "$RUNTIME_SDK_ROOT/emulator" >> "$GITHUB_PATH"
+          echo "$RUNTIME_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "ANDROID_HOME=$RUNTIME_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$RUNTIME_SDK_ROOT" >> "$GITHUB_ENV"
+          test -x "$RUNTIME_SDK_ROOT/platform-tools/adb"
+          test -x "$RUNTIME_SDK_ROOT/emulator/emulator"
+          test -x "$RUNTIME_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"
+          test -f "$RUNTIME_SDK_ROOT/system-images/android-${{ matrix.api }}/google_apis/x86_64/package.xml"
+          test -d "$HOME/.android/avd/$AVD_NAME.avd/snapshots/clean-boot"
+
+      - name: Boot cached snapshot and verify adb
+        env:
+          AVD_CACHE_HIT: ${{ steps.cache-state.outputs.cache-ready }}
+        run: |
+          set -euxo pipefail
+          adb start-server
+          test -d "$HOME/.android/avd/$AVD_NAME.avd/snapshots/clean-boot"
+          nohup emulator "@$AVD_NAME" -snapshot clean-boot -no-snapshot-save -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none > "$RUNNER_TEMP/emulator-api-${{ matrix.api }}.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/emulator.pid"
+
+          boot_completed=""
+          for attempt in $(seq 1 180); do
+            adb devices -l
+            if adb -s "$EMULATOR_SERIAL" get-state 2>/dev/null | grep -qx device; then
+              boot_completed="$(adb -s "$EMULATOR_SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+              if [ "$boot_completed" = "1" ]; then
+                break
+              fi
+            fi
+            sleep 2
+          done
+
+          adb devices -l
+          test "$boot_completed" = "1"
+          actual_api="$(adb -s "$EMULATOR_SERIAL" shell getprop ro.build.version.sdk | tr -d '\r')"
+          android_release="$(adb -s "$EMULATOR_SERIAL" shell getprop ro.build.version.release | tr -d '\r')"
+          test "$actual_api" = "${{ matrix.api }}"
+          if grep -Eiq "failed to load snapshot|cannot load snapshot|snapshot.*incompatible" "$RUNNER_TEMP/emulator-api-${{ matrix.api }}.log"; then
+            echo "Cached snapshot failed to load." >&2
+            exit 1
+          fi
+          echo "cache-hit=$AVD_CACHE_HIT"
+          echo "sys.boot_completed=$boot_completed"
+          echo "API level=$actual_api"
+          echo "Android release=$android_release"
+
+          input_ready=""
+          for attempt in $(seq 1 30); do
+            if adb -s "$EMULATOR_SERIAL" shell input keyevent 82 >/dev/null 2>&1; then
+              input_ready="1"
+              break
+            fi
+            sleep 1
+          done
+          test "$input_ready" = "1"
+
+      - name: Download APK artifact
+        if: ${{ inputs.apk_artifact_name != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.apk_artifact_name }}
+          path: .runtime-apk
+
+      - name: Resolve APK
+        id: apk
+        if: ${{ inputs.apk_artifact_name != '' || inputs.apk_path != '' }}
+        run: |
+          set -euo pipefail
+          candidates=()
+          if [ -n "${APK_INPUT_PATH}" ]; then
+            if [[ "${APK_INPUT_PATH}" = /* ]]; then
+              candidates+=("${APK_INPUT_PATH}")
+            else
+              candidates+=("${GITHUB_WORKSPACE}/${APK_INPUT_PATH}")
+              candidates+=("${GITHUB_WORKSPACE}/.runtime-apk/${APK_INPUT_PATH}")
+            fi
+          else
+            while IFS= read -r file; do candidates+=("${file}"); done < <(find "${GITHUB_WORKSPACE}/.runtime-apk" -type f -name "*.apk" | sort)
+          fi
+
+          apk_file=""
+          for candidate in "${candidates[@]}"; do
+            if [ -f "${candidate}" ]; then
+              if [ -n "${apk_file}" ]; then
+                echo "More than one APK matched; set apk_path explicitly." >&2
+                exit 1
+              fi
+              apk_file="${candidate}"
+            fi
+          done
+          test -n "${apk_file}"
+          echo "apk_file=${apk_file}" >> "${GITHUB_OUTPUT}"
+          sha256sum "${apk_file}"
+
+      - name: Run reusable APK runtime tests
+        if: ${{ steps.apk.outputs.apk_file != '' }}
+        env:
+          APK_FILE: ${{ steps.apk.outputs.apk_file }}
+        run: |
+          set -euo pipefail
+          package_name="${PACKAGE_INPUT}"
+          if [ -z "${package_name}" ]; then
+            package_name="$(apkanalyzer manifest application-id "${APK_FILE}")"
+          fi
+          test -n "${package_name}"
+          [[ "${package_name}" =~ ^[A-Za-z0-9._]+$ ]] || {
+            echo "Invalid package name: ${package_name}" >&2
+            exit 1
+          }
+
+          case "${{ matrix.api }}" in
+            30) profile_script="runtime-tests/standard.sh" ;;
+            31) profile_script="runtime-tests/smoke.sh" ;;
+            *) echo "No default runtime profile for API ${{ matrix.api }}" >&2; exit 1 ;;
+          esac
+
+          run_repo_script() {
+            local relative_path="$1"
+            local script_path
+            script_path="$(realpath -m "${GITHUB_WORKSPACE}/${relative_path}")"
+            case "${script_path}" in
+              "${GITHUB_WORKSPACE}"/*) ;;
+              *) echo "Runtime test script must stay inside the repository: ${relative_path}" >&2; exit 1 ;;
+            esac
+            test -f "${script_path}"
+            DEVICE_SERIAL="${EMULATOR_SERIAL}" \
+            API_LEVEL="${{ matrix.api }}" \
+            APK_PATH="${APK_FILE}" \
+            PACKAGE_NAME="${package_name}" \
+            LAUNCH_COMPONENT="${LAUNCH_COMPONENT}" \
+            bash "${script_path}"
+          }
+
+          echo "DEFAULT_RUNTIME_PROFILE=${profile_script} API=${{ matrix.api }} PACKAGE=${package_name}"
+          run_repo_script "${profile_script}"
+
+          if [ -n "${FUNCTIONAL_TEST_SCRIPT}" ]; then
+            echo "CUSTOM_RUNTIME_SCRIPT=${FUNCTIONAL_TEST_SCRIPT}"
+            run_repo_script "${FUNCTIONAL_TEST_SCRIPT}"
+          fi
+
+          app_script="runtime-tests/apps/${package_name}.sh"
+          if [ -f "${GITHUB_WORKSPACE}/${app_script}" ]; then
+            echo "PACKAGE_RUNTIME_SCRIPT=${app_script}"
+            run_repo_script "${app_script}"
+          else
+            echo "PACKAGE_RUNTIME_SCRIPT=none PACKAGE=${package_name}"
+          fi
+
+          adb -s "${EMULATOR_SERIAL}" logcat -d -v threadtime > "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt"
+          if grep -E "ANR in ${package_name}|SecurityException.*${package_name}|${package_name}.*SecurityException" "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt"; then
+            echo "Serious runtime error found in logcat." >&2
+            exit 1
+          fi
+          if grep -A8 -B2 "FATAL EXCEPTION" "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt" | grep -Fq "${package_name}"; then
+            echo "Fatal exception found in logcat." >&2
+            exit 1
+          fi
+
+      - name: Capture diagnostics
+        if: always()
+        run: |
+          set +e
+          timeout 10s adb devices -l || true
+          timeout 10s adb -s "${EMULATOR_SERIAL}" shell getprop sys.boot_completed || true
+          timeout 10s adb -s "${EMULATOR_SERIAL}" shell getprop ro.build.version.sdk || true
+          timeout 10s adb -s "${EMULATOR_SERIAL}" logcat -d -v threadtime > "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt" || true
+          tail -n 300 "${RUNNER_TEMP}/emulator-api-${{ matrix.api }}.log" || true
+
+      - name: Stop emulator before cache archive
+        if: always()
+        run: |
+          set +e
+          timeout 10s adb -s "${EMULATOR_SERIAL}" emu kill || true
+          if [ -f "${RUNNER_TEMP}/emulator.pid" ]; then
+            timeout 30s tail --pid="$(cat "${RUNNER_TEMP}/emulator.pid")" -f /dev/null || true
+          fi
+          if [ -f "${RUNNER_TEMP}/snapshot-emulator.pid" ]; then
+            timeout 30s tail --pid="$(cat "${RUNNER_TEMP}/snapshot-emulator.pid")" -f /dev/null || true
+          fi
+          sync
+
+      - name: Upload runtime logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-runtime-logs-api-${{ matrix.api }}
+          path: |
+            ${{ runner.temp }}/emulator-api-${{ matrix.api }}.log
+            ${{ runner.temp }}/logcat-api-${{ matrix.api }}.txt
+            ${{ runner.temp }}/runtime-test-api-${{ matrix.api }}/*.txt
+          if-no-files-found: warn
+          retention-days: 14
