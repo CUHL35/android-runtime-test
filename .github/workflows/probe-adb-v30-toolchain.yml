@@ -1,0 +1,70 @@
+name: Probe ADB v30 toolchain
+
+on:
+  push:
+    branches: [probe-adb-v30-toolchain]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: current
+            agp: '9.4.0'
+            gradle: '9.6.0'
+          - name: fallback
+            agp: '9.3.2'
+            gradle: '9.5.0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ matrix.gradle }}
+      - name: Show Java and Gradle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          java -version
+          gradle --version
+      - name: Resolve AGP artifact through Google Maven
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf probe-project
+          mkdir -p probe-project
+          cat > probe-project/settings.gradle <<'EOF'
+          pluginManagement {
+            repositories {
+              google()
+              mavenCentral()
+              gradlePluginPortal()
+            }
+          }
+          dependencyResolutionManagement {
+            repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+            repositories { google(); mavenCentral() }
+          }
+          rootProject.name = 'agp-probe'
+          EOF
+          cat > probe-project/build.gradle <<EOF
+          plugins {
+            id 'com.android.application' version '${{ matrix.agp }}' apply false
+          }
+          EOF
+          gradle -p probe-project --no-daemon --stacktrace help
+      - name: Inspect stable Android SDK package IDs
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SDKMANAGER="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          "$SDKMANAGER" --list --channel=0 > sdk-list.txt
+          echo '=== Stable platform/build-tools candidates ==='
+          grep -E 'platforms;android-(36|37([^0-9]|$)|37\.0)|build-tools;36\.0\.0|build-tools;37' sdk-list.txt || true
