@@ -1,0 +1,128 @@
+name: Fixx v34 Toolchain Pack
+
+on:
+  push:
+    branches: [fixx-v34-toolchain-pack]
+  workflow_dispatch:
+
+jobs:
+  pack:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+          cache-read-only: true
+
+      - name: Install exact Android SDK packages
+        shell: bash
+        run: |
+          set -euxo pipefail
+          yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --install \
+            'platforms;android-36' \
+            'build-tools;36.0.0'
+          "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --list --channel=0 | grep -E 'platforms;android-36|build-tools;36.0.0' | head -20
+
+      - name: Resolve exact Fixx Pro build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf dummy
+          mkdir -p dummy/app/src/main/java/vn/longdev/dummy
+          mkdir -p dummy/app/src/main
+          cat > dummy/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven { url = uri('https://jitpack.io') }
+              }
+          }
+          rootProject.name = 'FixxDependencyWarmup'
+          include ':app'
+          EOF
+          cat > dummy/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '9.3.2' apply false
+          }
+          EOF
+          cat > dummy/app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace = 'vn.longdev.dummy'
+              compileSdk = 36
+              buildToolsVersion = '36.0.0'
+              defaultConfig {
+                  applicationId = 'vn.longdev.dummy'
+                  minSdk = 30
+                  targetSdk = 31
+                  versionCode = 1
+                  versionName = '1'
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+          }
+          dependencies {
+              implementation 'dev.rikka.shizuku:api:13.1.5'
+              implementation 'dev.rikka.shizuku:provider:13.1.5'
+              implementation 'com.github.MuntashirAkon:libadb-android:3.1.1'
+              implementation 'com.github.MuntashirAkon:sun-security-android:1.1'
+              implementation 'org.conscrypt:conscrypt-android:2.5.3'
+          }
+          EOF
+          cat > dummy/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:theme="@style/AppTheme" /></manifest>
+          EOF
+          mkdir -p dummy/app/src/main/res/values
+          cat > dummy/app/src/main/res/values/styles.xml <<'EOF'
+          <resources><style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar" /></resources>
+          EOF
+          cat > dummy/app/src/main/java/vn/longdev/dummy/Main.java <<'EOF'
+          package vn.longdev.dummy; public final class Main { private Main() {} }
+          EOF
+          cd dummy
+          gradle wrapper --gradle-version 9.5.0 --distribution-type bin
+          ./gradlew --no-daemon assembleDebug
+          ./gradlew --offline --no-daemon assembleDebug
+          cd ..
+
+      - name: Pack JDK17 SDK36 Gradle caches
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p toolchain-pack
+          tar -C "$JAVA_HOME" -czf toolchain-pack/jdk17-linux-x64.tar.gz .
+          tar -C "$ANDROID_SDK_ROOT" -czf toolchain-pack/android-sdk36-buildtools36-linux-x64.tar.gz \
+            platforms/android-36 build-tools/36.0.0
+          tar -C "$HOME/.gradle" -czf toolchain-pack/gradle95-offline-cache.tar.gz \
+            caches wrapper
+          sha256sum toolchain-pack/* > toolchain-pack/SHA256SUMS.txt
+          du -h toolchain-pack/*
+          cat toolchain-pack/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fixx-v34-toolchain-pack
+          path: toolchain-pack/
+          retention-days: 1
+          compression-level: 0
