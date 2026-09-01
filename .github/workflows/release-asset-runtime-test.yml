@@ -355,8 +355,9 @@ jobs:
           else
             candidates=()
             while IFS= read -r file; do
-              if grep -Eq "com\.android\.application|apply[[:space:]]+plugin:[[:space:]]*['\"]com\.android\.application['\"]" "$file" &&
-                 ! grep -Eq "com\.android\.application['\"]?\)?[[:space:]]+apply[[:space:]]+false" "$file"; then
+              if grep -Eq "apply[[:space:]]+plugin:[[:space:]]*['\"]com\.android\.application['\"]" "$file" ||
+                 grep -E "id[[:space:]]*(\([[:space:]]*)?['\"]com\.android\.application['\"]" "$file" |
+                   grep -Ev "apply[[:space:]]+false" >/dev/null; then
                 dir="$(dirname "$file")"
                 candidate="${dir#./}"
                 candidate="${candidate//\//:}"
