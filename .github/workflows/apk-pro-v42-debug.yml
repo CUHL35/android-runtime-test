@@ -59,6 +59,7 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
+
           p = Path('gradle/embedded-toolchain.gradle')
           s = p.read_text()
           old = "    ]\n    ProcessBuilder pb = new ProcessBuilder(command)"
@@ -82,10 +83,33 @@ jobs:
           if old2 not in s:
               raise SystemExit('embedded asset dependency block not found')
           p.write_text(s.replace(old2, new2, 1))
+
+          p = Path('app/build.gradle')
+          s = p.read_text()
+          old = ("    buildTypes {\n"
+                 "        release {\n"
+                 "            minifyEnabled false\n"
+                 "            shrinkResources false\n"
+                 "        }\n"
+                 "    }\n"
+                 "}\n")
+          new = ("    buildTypes {\n"
+                 "        release {\n"
+                 "            minifyEnabled false\n"
+                 "            shrinkResources false\n"
+                 "        }\n"
+                 "    }\n\n"
+                 "    lint {\n"
+                 "        disable 'ExpiredTargetSdkVersion'\n"
+                 "    }\n"
+                 "}\n")
+          if old not in s:
+              raise SystemExit('buildTypes block not found')
+          p.write_text(s.replace(old, new, 1))
           PY
 
           check_sha() { test "$(sha256sum "$2" | awk '{print $1}')" = "$1"; }
-          check_sha 235651621aeeeb04cd56b600571dd61372f7d7f2f4a9b89eadffd3c747f51903 app/build.gradle
+          check_sha b624c4f9d790c8b9ed7d47bf6428d97142fa4af2dc2aee2a05cc1549439c9abc app/build.gradle
           check_sha 4f5e02dcaad4f23dcd4d9968e6641ad5cb7ab173442f16c0763d975b58c35f38 gradle/embedded-toolchain.gradle
           check_sha fee8261fe12142efa3adc220fbaf4284ec693cf6d2001eb523b555dcaffa2a60 app/src/main/java/com/longdev/apkbuilder/core/ToolchainManager.java
           check_sha 61fb9353c436cccf96384bfd80a94ed9761288f69f7bbc2cdedac5d4591863c4 app/src/main/java/com/longdev/apkbuilder/MainActivity.java
