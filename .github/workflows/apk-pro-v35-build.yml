@@ -1,0 +1,96 @@
+name: APK PRO v35 Build Only
+
+on:
+  push:
+    branches: [apk-pro-v35-build]
+    paths:
+      - '.github/workflows/apk-pro-v35-build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build exact v35 source
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Materialize v35 source from v34 baseline materializers
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/APK-PRO-v35"
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          for s in runtime-tests/apk-pro-v34/materialize-0{1,2,3,4}.sh; do
+            bash "$s" "$ROOT"
+          done
+
+          # v34 -> v35 production delta: toolchain declarations + app version only.
+          sed -i "s/version '9.4.0'/version '9.3.2'/" "$ROOT/build.gradle"
+          sed -i 's/gradle-9\.6\.0-bin\.zip/gradle-9.5.0-bin.zip/' "$ROOT/gradle/wrapper/gradle-wrapper.properties"
+          sed -i 's/bbaeb2fef8710818cf0e261201dab964c572f92b942812df0c3620d62a529a01/553c78f50dafcd54d65b9a444649057857469edf836431389695608536d6b746/' "$ROOT/gradle/wrapper/gradle-wrapper.properties"
+          sed -i "s/versionCode 34/versionCode 35/; s/versionName '34'/versionName '35'/" "$ROOT/app/build.gradle"
+          sed -i 's/APK PRO v34 lightweight ARM64 bootstrap manager/APK PRO v35 lightweight ARM64 bootstrap manager/' "$ROOT/app/src/main/java/com/longdev/apkbuilder/core/ToolchainManager.java"
+
+          # PNG launcher files are intentionally not committed to the CI branch.
+          # Remove only their manifest references for this build-only compile check.
+          sed -i '/android:icon="@mipmap\/ic_launcher"/d;/android:roundIcon="@mipmap\/ic_launcher_round"/d' "$ROOT/app/src/main/AndroidManifest.xml"
+
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo '=== BUILD CONFIG ==='
+          cat "$ROOT/build.gradle"
+          cat "$ROOT/gradle/wrapper/gradle-wrapper.properties"
+          grep -E 'compileSdk|buildToolsVersion|minSdk|targetSdk|versionCode|versionName' "$ROOT/app/build.gradle"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install exact Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --channel=3 'platforms;android-37.0' 'build-tools;36.0.0'
+          test -f "$ANDROID_HOME/platforms/android-37.0/android.jar"
+          test -f "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar"
+
+      - name: Build Debug only
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$ROOT"
+          gradle clean assembleDebug --no-daemon --console=plain --stacktrace 2>&1 | tee "$RUNNER_TEMP/v35-build.log"
+          APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n1)"
+          test -f "$APK"
+          mkdir -p "$RUNNER_TEMP/apk-out"
+          cp "$APK" "$RUNNER_TEMP/apk-out/APK-PRO-v35-debug.apk"
+          sha256sum "$RUNNER_TEMP/apk-out/APK-PRO-v35-debug.apk"
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-pro-v35-build-log
+          path: ${{ runner.temp }}/v35-build.log
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-pro-v35-debug
+          path: ${{ runner.temp }}/apk-out/APK-PRO-v35-debug.apk
+          if-no-files-found: error
+          retention-days: 1
