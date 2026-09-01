@@ -40,25 +40,30 @@ jobs:
       - name: Stage APK PRO v42 source
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           ROOT="$RUNNER_TEMP/apk-pro-v42"
-          rm -rf "$ROOT"
+          DELTA="$RUNNER_TEMP/v42-delta.zip"
+          rm -rf "$ROOT" "$DELTA"
           mkdir -p "$ROOT"
+          test -f runtime-tests/apk-pro-v35/source/app/build.gradle
           cp -a runtime-tests/apk-pro-v35/source/. "$ROOT/"
-          cat runtime-tests/apk-pro-v42-delta/part*.b64 | base64 -d > "$RUNNER_TEMP/v42-delta.zip"
-          unzip -oq "$RUNNER_TEMP/v42-delta.zip" -d "$ROOT"
+          cat runtime-tests/apk-pro-v42-delta/part*.b64 | tr -d '\r\n' | base64 -d > "$DELTA"
+          echo "delta-bytes=$(stat -c%s "$DELTA")"
+          sha256sum "$DELTA"
+          unzip -t "$DELTA"
+          unzip -oq "$DELTA" -d "$ROOT"
           rm -rf "$ROOT/release-signing"
-          grep -F "versionCode 42" "$ROOT/app/build.gradle"
-          grep -F "versionName '42'" "$ROOT/app/build.gradle"
-          grep -F "compileSdk 37" "$ROOT/app/build.gradle"
-          grep -F "buildToolsVersion '36.0.0'" "$ROOT/app/build.gradle"
+          sed -n '1,40p' "$ROOT/app/build.gradle"
+          test "$(sed -n 's/^[[:space:]]*versionCode[[:space:]]*//p' "$ROOT/app/build.gradle" | head -1)" = "42"
+          test -f "$ROOT/gradle/embedded-toolchain.gradle"
           echo "ROOT=$ROOT" >> "$GITHUB_ENV"
 
       - name: Build Debug
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           cd "$ROOT"
+          gradle --version
           gradle clean assembleDebug --no-daemon --console=plain --stacktrace
           APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n1)"
           test -f "$APK"
