@@ -50,16 +50,12 @@ jobs:
           cat runtime-tests/apk-pro-v42-delta/part*.b64 | tr -d '\r\n' | base64 -d > "$DELTA"
           unzip -oq "$DELTA" -x 'app/src/main/java/com/longdev/apkbuilder/core/ToolchainManager.java' -d "$ROOT"
           rm -rf "$ROOT/release-signing"
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("$ROOT/app/build.gradle")
-          s = p.read_text()
-          s = s.replace("versionCode 42", "versionCode 43")
-          s = s.replace("versionName '42'", "versionName '43'")
-          s = s.replace("minSdk 30", "minSdk 28")
-          s = s.replace("targetSdk 33", "targetSdk 28")
-          p.write_text(s)
-          PY
+          sed -i \
+            -e 's/versionCode 42/versionCode 43/' \
+            -e "s/versionName '42'/versionName '43'/" \
+            -e 's/minSdk 30/minSdk 28/' \
+            -e 's/targetSdk 33/targetSdk 28/' \
+            "$ROOT/app/build.gradle"
           grep -E 'versionCode|versionName|minSdk|targetSdk|compileSdk' "$ROOT/app/build.gradle"
           grep -q 'versionCode 43' "$ROOT/app/build.gradle"
           grep -q "versionName '43'" "$ROOT/app/build.gradle"
