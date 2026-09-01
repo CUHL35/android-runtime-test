@@ -26,7 +26,7 @@ on:
         required: false
         type: string
       functional_test_script:
-        description: "Optional repo-relative shell script executed after launch"
+        description: "Optional repo-relative shell script executed after the default runtime profile"
         required: false
         type: string
   workflow_call:
@@ -52,7 +52,7 @@ on:
         type: string
         default: ""
       functional_test_script:
-        description: "Optional repo-relative shell script executed after launch"
+        description: "Optional repo-relative shell script executed after the default runtime profile"
         required: false
         type: string
         default: ""
@@ -337,44 +337,68 @@ jobs:
           echo "apk_file=${apk_file}" >> "${GITHUB_OUTPUT}"
           sha256sum "${apk_file}"
 
-      - name: Install, launch, and run functional test
+      - name: Run reusable APK runtime tests
         if: ${{ steps.apk.outputs.apk_file != '' }}
         env:
           APK_FILE: ${{ steps.apk.outputs.apk_file }}
         run: |
-          set -euxo pipefail
+          set -euo pipefail
           package_name="${PACKAGE_INPUT}"
           if [ -z "${package_name}" ]; then
             package_name="$(apkanalyzer manifest application-id "${APK_FILE}")"
           fi
           test -n "${package_name}"
+          [[ "${package_name}" =~ ^[A-Za-z0-9._]+$ ]] || {
+            echo "Invalid package name: ${package_name}" >&2
+            exit 1
+          }
 
-          adb -s "${EMULATOR_SERIAL}" logcat -c
-          adb -s "${EMULATOR_SERIAL}" install -r -t "${APK_FILE}"
-          adb -s "${EMULATOR_SERIAL}" shell pm path "${package_name}" | grep -q "^package:"
+          case "${{ matrix.api }}" in
+            30) profile_script="runtime-tests/standard.sh" ;;
+            31) profile_script="runtime-tests/smoke.sh" ;;
+            *) echo "No default runtime profile for API ${{ matrix.api }}" >&2; exit 1 ;;
+          esac
 
-          if [ -n "${LAUNCH_COMPONENT}" ]; then
-            adb -s "${EMULATOR_SERIAL}" shell am start -W -n "${LAUNCH_COMPONENT}"
-          else
-            launch_output="$(adb -s "${EMULATOR_SERIAL}" shell monkey -p "${package_name}" -c android.intent.category.LAUNCHER 1 2>&1)"
-            echo "${launch_output}"
-            grep -q "Events injected: 1" <<<"${launch_output}"
-          fi
-
-          sleep 5
-          if [ -n "${FUNCTIONAL_TEST_SCRIPT}" ]; then
-            script_path="$(realpath -m "${GITHUB_WORKSPACE}/${FUNCTIONAL_TEST_SCRIPT}")"
+          run_repo_script() {
+            local relative_path="$1"
+            local script_path
+            script_path="$(realpath -m "${GITHUB_WORKSPACE}/${relative_path}")"
             case "${script_path}" in
               "${GITHUB_WORKSPACE}"/*) ;;
-              *) echo "functional_test_script must stay inside the repository" >&2; exit 1 ;;
+              *) echo "Runtime test script must stay inside the repository: ${relative_path}" >&2; exit 1 ;;
             esac
             test -f "${script_path}"
-            DEVICE_SERIAL="${EMULATOR_SERIAL}"             API_LEVEL="${{ matrix.api }}"             APK_PATH="${APK_FILE}"             PACKAGE_NAME="${package_name}"               bash "${script_path}"
+            DEVICE_SERIAL="${EMULATOR_SERIAL}" \
+            API_LEVEL="${{ matrix.api }}" \
+            APK_PATH="${APK_FILE}" \
+            PACKAGE_NAME="${package_name}" \
+            LAUNCH_COMPONENT="${LAUNCH_COMPONENT}" \
+            bash "${script_path}"
+          }
+
+          echo "DEFAULT_RUNTIME_PROFILE=${profile_script} API=${{ matrix.api }} PACKAGE=${package_name}"
+          run_repo_script "${profile_script}"
+
+          if [ -n "${FUNCTIONAL_TEST_SCRIPT}" ]; then
+            echo "CUSTOM_RUNTIME_SCRIPT=${FUNCTIONAL_TEST_SCRIPT}"
+            run_repo_script "${FUNCTIONAL_TEST_SCRIPT}"
+          fi
+
+          app_script="runtime-tests/apps/${package_name}.sh"
+          if [ -f "${GITHUB_WORKSPACE}/${app_script}" ]; then
+            echo "PACKAGE_RUNTIME_SCRIPT=${app_script}"
+            run_repo_script "${app_script}"
+          else
+            echo "PACKAGE_RUNTIME_SCRIPT=none PACKAGE=${package_name}"
           fi
 
           adb -s "${EMULATOR_SERIAL}" logcat -d -v threadtime > "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt"
-          if grep -E "FATAL EXCEPTION|ANR in ${package_name}|SecurityException.*${package_name}" "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt"; then
+          if grep -E "ANR in ${package_name}|SecurityException.*${package_name}|${package_name}.*SecurityException" "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt"; then
             echo "Serious runtime error found in logcat." >&2
+            exit 1
+          fi
+          if grep -A8 -B2 "FATAL EXCEPTION" "${RUNNER_TEMP}/logcat-api-${{ matrix.api }}.txt" | grep -Fq "${package_name}"; then
+            echo "Fatal exception found in logcat." >&2
             exit 1
           fi
 
@@ -409,5 +433,6 @@ jobs:
           path: |
             ${{ runner.temp }}/emulator-api-${{ matrix.api }}.log
             ${{ runner.temp }}/logcat-api-${{ matrix.api }}.txt
+            ${{ runner.temp }}/runtime-test-api-${{ matrix.api }}/*.txt
           if-no-files-found: warn
           retention-days: 14
