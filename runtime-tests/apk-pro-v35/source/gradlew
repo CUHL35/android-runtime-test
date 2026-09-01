@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+set -eu
+APP_HOME=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -n "${JAVA_HOME:-}" ]; then
+  JAVA_CMD="$JAVA_HOME/bin/java"
+  [ -x "$JAVA_CMD" ] || { echo "ERROR: JAVA_HOME does not contain executable bin/java" >&2; exit 1; }
+else
+  JAVA_CMD=$(command -v java 2>/dev/null || true)
+  [ -n "$JAVA_CMD" ] || { echo "ERROR: Java 17+ is required to run the Gradle wrapper." >&2; exit 1; }
+fi
+exec "$JAVA_CMD" -jar "$APP_HOME/gradle/wrapper/gradle-wrapper.jar" "$@"

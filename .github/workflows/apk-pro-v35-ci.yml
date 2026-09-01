@@ -24,18 +24,20 @@ jobs:
         with:
           gradle-version: '9.5.0'
       - uses: android-actions/setup-android@v3
-      - name: Materialize APK PRO v35 source without signing material
+      - name: Stage complete APK PRO v35 source without signing material
         shell: bash
         run: |
           set -euo pipefail
           ROOT="$RUNNER_TEMP/apk-pro-v35"
           rm -rf "$ROOT"
           mkdir -p "$ROOT"
-          for s in runtime-tests/apk-pro-v35/materialize-v35-*.sh; do
-            bash "$s" "$ROOT"
-          done
-          # CI-only: launcher PNGs are not committed; remove icon refs. Production source is unchanged.
+          cp -a runtime-tests/apk-pro-v35/source/. "$ROOT/"
+          # CI-only: launcher PNGs and JKS are not committed; remove icon refs.
           sed -i '/android:icon="@mipmap\/ic_launcher"/d;/android:roundIcon="@mipmap\/ic_launcher_round"/d' "$ROOT/app/src/main/AndroidManifest.xml"
+          (
+            cd "$ROOT"
+            sha256sum -c "$GITHUB_WORKSPACE/runtime-tests/apk-pro-v35/source-ci.sha256"
+          )
           echo "ROOT=$ROOT" >> "$GITHUB_ENV"
       - name: Verify declared toolchain
         shell: bash

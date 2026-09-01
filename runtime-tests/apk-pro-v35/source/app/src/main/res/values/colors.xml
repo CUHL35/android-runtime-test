@@ -1,0 +1,16 @@
+<resources>
+    <color name="bg">#0B0D12</color>
+    <color name="panel">#141821</color>
+    <color name="panel2">#191E28</color>
+    <color name="terminal">#080A0F</color>
+    <color name="line">#2A3140</color>
+    <color name="text">#F5F7FB</color>
+    <color name="subtext">#8F98A8</color>
+    <color name="blue">#2D8CFF</color>
+    <color name="blue2">#52B8FF</color>
+    <color name="green">#37D67A</color>
+    <color name="orange">#FFB347</color>
+    <color name="red">#FF5D62</color>
+    <color name="disabled">#242A35</color>
+    <color name="disabled_text">#657080</color>
+</resources>

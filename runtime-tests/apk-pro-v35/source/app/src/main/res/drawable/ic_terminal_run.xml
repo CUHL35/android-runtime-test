@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="30dp"
+    android:height="30dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- aShell-style execute/fast-forward mark: two filled right-pointing blades. -->
+    <path
+        android:fillColor="#0A0B0D"
+        android:pathData="M4,5 L13.2,12 L4,19 Z" />
+    <path
+        android:fillColor="#0A0B0D"
+        android:pathData="M10,5 L19.2,12 L10,19 Z" />
+</vector>

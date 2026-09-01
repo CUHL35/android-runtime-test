@@ -1,0 +1,44 @@
+APK PRO v35 BUILD STATUS
+
+Baseline source: APK-PRO-v34.zip
+Baseline SHA-256: 7e5a9a107167a91bab032390da0428ceebbe6eee802aaabb8f9a6194ae948d95
+
+versionName: 35
+versionCode: 35
+applicationId: com.apkbld
+namespace: com.longdev.apkbuilder
+compileSdk: 37
+minSdk: 30
+targetSdk: 31
+AGP: 9.3.2
+Gradle wrapper: 9.5.0
+Build Tools façade: 36.0.0
+Gradle runtime JDK: 17
+
+Changes:
+- Fixed build blocker confirmed on device: AGP `9.4.0` final is not published in Google Maven (404); pinned current stable AGP `9.3.2`.
+- Replaced nonexistent Gradle `9.6.0` final wrapper target with AGP 9.3 default Gradle `9.5.0`; pinned official Gradle SHA-256.
+- Fixed API 37 platform coordinate: compileSdk 37 now resolves stable `platforms;android-37.0` and caches `platforms/android-37.0`.
+- Build preflight now accepts minor-versioned `.0` SDK platform directories.
+- Replaced import-only fresh-install Core flow with lightweight first-use ARM64 provisioning + persistent cache.
+- Added pinned arm64-core manifest and Termux upstream bootstrap SHA-256 validation.
+- ARM64 packages download-only to private cache, staging relocate/repack, validation, swap + rollback/recovery.
+- Removed JDK21 from required base core/signing path; JDK17 runs Gradle and apksigner Java artifact.
+- Google Build Tools supplies architecture-neutral apksigner/core-lambda-stubs with metadata checksum.
+- Exact Gradle wrapper and official repository policy preserved; no auto-upgrade.
+- Existing package/version/signing/UI/PATCH/build workflows preserved.
+- Added one-time first-launch toolchain prompt with Basic / Basic + SDK37 / Defer.
+- Added persistent menu action `Tải toolchain` for manual retry after defer.
+- Added runtime smoke gate for java/javac/keytool/aapt2/aidl/zipalign before Core READY.
+- Added HTTP retry/resume with Content-Range validation and atomic finalize.
+- Blocked cache/reset/diagnostic races while manual toolchain provisioning is active.
+
+BUILD: NOT RUN
+RUNTIME API30: NOT RUN
+RUNTIME API31: NOT RUN
+FUNCTIONAL TEST ALL: NOT RUN
+STATIC PREFLIGHT: PASS
+JAVA17 CORE STATIC COMPILE: PASS
+JAVA17 SDK REPOSITORY COMPILE: PASS
+SDK 37.0 METADATA REGRESSION: PASS
+TEST MATRIX COVERAGE: 47/47
