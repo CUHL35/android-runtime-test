@@ -65,12 +65,30 @@ jobs:
           new = "    ].collect { it.toString() }\n    ProcessBuilder pb = new ProcessBuilder(command)"
           if old not in s:
               raise SystemExit('embedded ProcessBuilder command block not found')
-          p.write_text(s.replace(old, new, 1))
+          s = s.replace(old, new, 1)
+          old2 = """tasks.configureEach { task ->
+    if (task.name.startsWith('merge') && task.name.endsWith('Assets')) {
+        task.dependsOn(prepareEmbeddedToolchainAssets)
+    }
+}
+"""
+          new2 = """tasks.configureEach { task ->
+    String name = task.name
+    boolean mergesAssets = name.startsWith('merge') && name.endsWith('Assets')
+    boolean readsAssetsForLint = name.toLowerCase(Locale.ROOT).contains('lint')
+    if (name != 'prepareEmbeddedToolchainAssets' && (mergesAssets || readsAssetsForLint)) {
+        task.dependsOn(prepareEmbeddedToolchainAssets)
+    }
+}
+"""
+          if old2 not in s:
+              raise SystemExit('embedded asset dependency block not found')
+          p.write_text(s.replace(old2, new2, 1))
           PY
 
           check_sha() { test "$(sha256sum "$2" | awk '{print $1}')" = "$1"; }
           check_sha 235651621aeeeb04cd56b600571dd61372f7d7f2f4a9b89eadffd3c747f51903 app/build.gradle
-          check_sha 232961c0c459c6ca66b759d639e3a0bb23ae7a883f139deebf052a96abf7cf22 gradle/embedded-toolchain.gradle
+          check_sha 4f5e02dcaad4f23dcd4d9968e6641ad5cb7ab173442f16c0763d975b58c35f38 gradle/embedded-toolchain.gradle
           check_sha fee8261fe12142efa3adc220fbaf4284ec693cf6d2001eb523b555dcaffa2a60 app/src/main/java/com/longdev/apkbuilder/core/ToolchainManager.java
           check_sha 61fb9353c436cccf96384bfd80a94ed9761288f69f7bbc2cdedac5d4591863c4 app/src/main/java/com/longdev/apkbuilder/MainActivity.java
           check_sha abeea765337f31e8d6e30b1905c26090b79337eef01c5af3fb4dba0187c92106 app/src/main/java/com/longdev/apkbuilder/core/AndroidSdkRepository.java
