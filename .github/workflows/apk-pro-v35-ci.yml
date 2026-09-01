@@ -79,3 +79,5 @@ jobs:
       apk_artifact_name: apk-pro-v35-debug
       package_name: com.apkbld
       launch_component: com.apkbld/com.longdev.apkbuilder.MainActivity
+
+# Test request: APK-PRO-v35 baseline SHA-256 4fd79f1ce82f7d1c7fd1f89e3e09971de5e408b6ec82413bd75070f04e9bfa99
