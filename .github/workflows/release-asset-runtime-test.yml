@@ -1,0 +1,483 @@
+name: Release Asset Android Runtime Test
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag containing the asset
+        required: true
+        type: string
+      asset_name:
+        description: Exact APK or ZIP asset name
+        required: false
+        type: string
+      build_java_version:
+        description: ZIP only - exact JDK when source has no .java-version
+        required: false
+        type: string
+      app_module:
+        description: ZIP only - exact application module if detection is ambiguous
+        required: false
+        type: string
+      apk_output_path:
+        description: ZIP only - APK path relative to entry project if output is ambiguous
+        required: false
+        type: string
+      package_name:
+        description: Optional application package override
+        required: false
+        type: string
+      launch_component:
+        description: Optional package/activity component override
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+      asset_name:
+        required: false
+        type: string
+      build_java_version:
+        required: false
+        type: string
+      app_module:
+        required: false
+        type: string
+      apk_output_path:
+        required: false
+        type: string
+      package_name:
+        required: false
+        type: string
+      launch_component:
+        required: false
+        type: string
+  push:
+    branches: [codex/android-runtime-test]
+    paths: [runtime-tests/release-request.env]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-runtime-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-asset:
+    name: Resolve Release asset (no Java or Gradle)
+    runs-on: ubuntu-latest
+    outputs:
+      asset_type: ${{ steps.resolve.outputs.asset_type }}
+      package_name: ${{ steps.metadata.outputs.package_name }}
+      launch_component: ${{ steps.metadata.outputs.launch_component }}
+      build_java_version: ${{ steps.resolve.outputs.build_java_version }}
+      app_module: ${{ steps.resolve.outputs.app_module }}
+      apk_output_path: ${{ steps.resolve.outputs.apk_output_path }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download exact Release asset
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+          INPUT_ASSET_NAME: ${{ inputs.asset_name }}
+          INPUT_BUILD_JAVA: ${{ inputs.build_java_version }}
+          INPUT_APP_MODULE: ${{ inputs.app_module }}
+          INPUT_APK_OUTPUT: ${{ inputs.apk_output_path }}
+        run: |
+          set -euo pipefail
+          read_request() {
+            awk -F= -v wanted="$1" '
+              $1 == wanted { sub(/^[^=]*=/, ""); print; exit }
+            ' runtime-tests/release-request.env
+          }
+
+          release_tag="$INPUT_RELEASE_TAG"
+          asset_name="$INPUT_ASSET_NAME"
+          build_java="$INPUT_BUILD_JAVA"
+          app_module="$INPUT_APP_MODULE"
+          apk_output="$INPUT_APK_OUTPUT"
+
+          if [[ "$EVENT_NAME" == release ]]; then
+            release_tag="$EVENT_RELEASE_TAG"
+          elif [[ "$EVENT_NAME" == push ]]; then
+            test -f runtime-tests/release-request.env
+            release_tag="$(read_request release_tag)"
+            asset_name="$(read_request asset_name)"
+            build_java="$(read_request build_java_version)"
+            app_module="$(read_request app_module)"
+            apk_output="$(read_request apk_output_path)"
+          fi
+
+          if [[ -z "$release_tag" ]]; then
+            echo "::error::release_tag is required"
+            exit 1
+          fi
+
+          assets_json="$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json assets)"
+          if [[ -z "$asset_name" ]]; then
+            mapfile -t supported < <(
+              jq -r '.assets[].name | select(test("\\.(apk|zip)$"; "i"))' <<<"$assets_json"
+            )
+            if [[ "${#supported[@]}" -ne 1 ]]; then
+              echo "::error::Found ${#supported[@]} supported assets; asset_name is required because this workflow never guesses"
+              printf 'Supported asset: %s\n' "${supported[@]:-none}"
+              exit 1
+            fi
+            asset_name="${supported[0]}"
+          fi
+
+          if [[ ! "$asset_name" =~ ^[A-Za-z0-9._+-]+\.(apk|APK|zip|ZIP)$ ]]; then
+            echo "::error::asset_name must be an exact safe APK or ZIP filename"
+            exit 1
+          fi
+          count="$(jq --arg name "$asset_name" '[.assets[] | select(.name == $name)] | length' <<<"$assets_json")"
+          if [[ "$count" -ne 1 ]]; then
+            echo "::error::Expected one asset named $asset_name; found $count"
+            exit 1
+          fi
+
+          mkdir release-input
+          gh release download "$release_tag" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$asset_name" --dir release-input
+          asset_file="$PWD/release-input/$asset_name"
+          test -f "$asset_file"
+          sha256sum "$asset_file"
+
+          case "${asset_name,,}" in
+            *.apk) asset_type=apk ;;
+            *.zip) asset_type=zip ;;
+            *) echo "::error::Unsupported asset"; exit 1 ;;
+          esac
+
+          echo "asset_type=$asset_type" >> "$GITHUB_OUTPUT"
+          echo "asset_file=$asset_file" >> "$GITHUB_OUTPUT"
+          echo "build_java_version=$build_java" >> "$GITHUB_OUTPUT"
+          echo "app_module=$app_module" >> "$GITHUB_OUTPUT"
+          echo "apk_output_path=$apk_output" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Release input"
+            echo "- Tag: \`$release_tag\`"
+            echo "- Asset: \`$asset_name\`"
+            echo "- Type: \`$asset_type\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Inspect direct APK without Java or Gradle
+        id: metadata
+        if: steps.resolve.outputs.asset_type == 'apk'
+        shell: bash
+        env:
+          APK_FILE: ${{ steps.resolve.outputs.asset_file }}
+          PACKAGE_OVERRIDE: ${{ inputs.package_name }}
+          COMPONENT_OVERRIDE: ${{ inputs.launch_component }}
+        run: |
+          set -euo pipefail
+          package_name="$PACKAGE_OVERRIDE"
+          launch_component="$COMPONENT_OVERRIDE"
+          aapt="$(find "$ANDROID_HOME/build-tools" -type f -name aapt -perm -111 | sort -V | tail -n 1 || true)"
+
+          if [[ -z "$package_name" ]]; then
+            if [[ -z "$aapt" ]]; then
+              echo "::error::Native aapt unavailable; provide package_name. Java/Gradle will not be installed for APK input."
+              exit 1
+            fi
+            badging="$("$aapt" dump badging "$APK_FILE")"
+            package_name="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging" | head -n 1)"
+            if [[ -z "$launch_component" ]]; then
+              activity="$(sed -n "s/^launchable-activity: name='\([^']*\)'.*/\1/p" <<<"$badging" | head -n 1)"
+              [[ -n "$activity" ]] && launch_component="$package_name/$activity"
+            fi
+          fi
+          test -n "$package_name"
+
+          mkdir prepared-apk
+          cp "$APK_FILE" prepared-apk/app-under-test.apk
+          echo "package_name=$package_name" >> "$GITHUB_OUTPUT"
+          echo "launch_component=$launch_component" >> "$GITHUB_OUTPUT"
+          {
+            echo "### BUILD — APK asset"
+            echo "- BUILD: SKIPPED by design"
+            echo "- Java/Gradle setup: NO"
+            echo "- Package: \`$package_name\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload direct APK for runtime
+        if: steps.resolve.outputs.asset_type == 'apk'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk-direct
+          path: prepared-apk/app-under-test.apk
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload ZIP for isolated build
+        if: steps.resolve.outputs.asset_type == 'zip'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-source-zip
+          path: ${{ steps.resolve.outputs.asset_file }}
+          if-no-files-found: error
+          retention-days: 1
+
+  build-source:
+    name: BUILD — ZIP source
+    needs: resolve-asset
+    if: needs.resolve-asset.outputs.asset_type == 'zip'
+    runs-on: ubuntu-latest
+    outputs:
+      package_name: ${{ steps.metadata.outputs.package_name }}
+      launch_component: ${{ steps.metadata.outputs.launch_component }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-source-zip
+          path: source-input
+
+      - name: Validate ZIP and resolve exactly one project
+        id: project
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t zips < <(find source-input -maxdepth 1 -type f -iname '*.zip' -print)
+          [[ "${#zips[@]}" -eq 1 ]] || {
+            echo "::error::Expected exactly one ZIP; found ${#zips[@]}"; exit 1;
+          }
+          zip_file="${zips[0]}"
+
+          if unzip -Z1 "$zip_file" | awk '
+            /^\// || /\\/ || /(^|\/)\.\.(\/|$)/ { bad=1 }
+            END { exit bad ? 0 : 1 }
+          '; then
+            echo "::error::ZIP contains an unsafe path"
+            exit 1
+          fi
+
+          mkdir extracted
+          unzip -q "$zip_file" -d extracted
+          if find extracted -type l -print -quit | grep -q .; then
+            echo "::error::ZIP contains symlinks"
+            exit 1
+          fi
+
+          mapfile -t wrappers < <(find extracted -type f -name gradlew -print)
+          if [[ "${#wrappers[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one gradlew; found ${#wrappers[@]}. Refusing to guess."
+            printf '%s\n' "${wrappers[@]:-none}"
+            exit 1
+          fi
+
+          project_root="$(cd "$(dirname "${wrappers[0]}")" && pwd)"
+          mapfile -t settings < <(
+            find "$project_root" -maxdepth 1 -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) -print
+          )
+          [[ "${#settings[@]}" -eq 1 ]] || {
+            echo "::error::Expected exactly one settings.gradle(.kts); found ${#settings[@]}"; exit 1;
+          }
+          test -f "$project_root/gradle/wrapper/gradle-wrapper.jar"
+          test -f "$project_root/gradle/wrapper/gradle-wrapper.properties"
+          chmod +x "$project_root/gradlew"
+          distribution_url="$(sed -n 's/^distributionUrl=//p' "$project_root/gradle/wrapper/gradle-wrapper.properties")"
+          test -n "$distribution_url"
+
+          echo "project_root=$project_root" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Source validation"
+            echo "- One entry project: PASS"
+            echo "- Wrapper: \`$distribution_url\`"
+            echo "- Gradle/AGP/version files: unchanged"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve exact source JDK
+        id: java
+        shell: bash
+        env:
+          PROJECT_ROOT: ${{ steps.project.outputs.project_root }}
+          REQUESTED: ${{ needs.resolve-asset.outputs.build_java_version }}
+        run: |
+          set -euo pipefail
+          version="$REQUESTED"
+          [[ -z "$version" && -f "$PROJECT_ROOT/.java-version" ]] &&
+            version="$(tr -d '[:space:]' < "$PROJECT_ROOT/.java-version")"
+          if [[ -z "$version" && -f "$PROJECT_ROOT/.tool-versions" ]]; then
+            version="$(awk '$1 == "java" {print $2; exit}' "$PROJECT_ROOT/.tool-versions")"
+            version="${version#temurin-}"
+            version="${version#zulu-}"
+          fi
+          if [[ -z "$version" ]]; then
+            echo "::error::Source does not declare JDK. Supply build_java_version; refusing to guess or upgrade."
+            exit 1
+          fi
+          [[ "$version" =~ ^[A-Za-z0-9._+-]+$ ]] || {
+            echo "::error::Invalid JDK version"; exit 1;
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Set up exact JDK (ZIP path only)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ steps.java.outputs.version }}
+
+      - name: Restore separate Gradle dependency cache
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/codex/android-runtime-test' }}
+          gradle-home-cache-cleanup: true
+
+      - name: Resolve exactly one Android application module
+        id: module
+        shell: bash
+        env:
+          PROJECT_ROOT: ${{ steps.project.outputs.project_root }}
+          REQUESTED: ${{ needs.resolve-asset.outputs.app_module }}
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_ROOT"
+          module="${REQUESTED#:}"
+
+          if [[ -n "$module" ]]; then
+            module_dir="${module//:/\/}"
+            [[ -f "$module_dir/build.gradle" || -f "$module_dir/build.gradle.kts" ]] || {
+              echo "::error::Requested module has no build file: $module"; exit 1;
+            }
+          else
+            candidates=()
+            while IFS= read -r file; do
+              if grep -Eq "com\.android\.application|apply[[:space:]]+plugin:[[:space:]]*['\"]com\.android\.application['\"]" "$file" &&
+                 ! grep -Eq "com\.android\.application['\"]?\)?[[:space:]]+apply[[:space:]]+false" "$file"; then
+                dir="$(dirname "$file")"
+                candidate="${dir#./}"
+                candidate="${candidate//\//:}"
+                [[ "$candidate" == "." ]] && candidate=""
+                candidates+=("$candidate")
+              fi
+            done < <(find . -type f \( -name build.gradle -o -name build.gradle.kts \) -print)
+
+            if [[ "${#candidates[@]}" -ne 1 ]]; then
+              echo "::error::Found ${#candidates[@]} application modules. Supply app_module; refusing to guess."
+              printf 'Candidate: %s\n' "${candidates[@]:-none}"
+              exit 1
+            fi
+            module="${candidates[0]}"
+            module_dir="${module//:/\/}"
+            [[ -z "$module_dir" ]] && module_dir=.
+          fi
+
+          [[ -n "$module" ]] && task=":$module:assembleDebug" || task=assembleDebug
+          echo "module_dir=$module_dir" >> "$GITHUB_OUTPUT"
+          echo "task=$task" >> "$GITHUB_OUTPUT"
+
+      - name: Build Debug APK with unchanged source wrapper
+        working-directory: ${{ steps.project.outputs.project_root }}
+        shell: bash
+        env:
+          TASK: ${{ steps.module.outputs.task }}
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon "$TASK"
+
+      - name: Resolve exactly one Debug APK
+        id: apk
+        shell: bash
+        env:
+          PROJECT_ROOT: ${{ steps.project.outputs.project_root }}
+          MODULE_DIR: ${{ steps.module.outputs.module_dir }}
+          REQUESTED: ${{ needs.resolve-asset.outputs.apk_output_path }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$REQUESTED" ]]; then
+            [[ "$REQUESTED" != /* && "$REQUESTED" != *".."* ]] || {
+              echo "::error::apk_output_path must be a safe relative path"; exit 1;
+            }
+            apk="$PROJECT_ROOT/$REQUESTED"
+            test -f "$apk"
+          else
+            mapfile -t apks < <(
+              find "$PROJECT_ROOT/$MODULE_DIR/build/outputs/apk/debug" \
+                -type f -name '*.apk' ! -name '*androidTest*.apk' -print 2>/dev/null || true
+            )
+            if [[ "${#apks[@]}" -ne 1 ]]; then
+              echo "::error::Found ${#apks[@]} Debug APKs. Supply apk_output_path; refusing to guess."
+              printf '%s\n' "${apks[@]:-none}"
+              exit 1
+            fi
+            apk="${apks[0]}"
+          fi
+          echo "path=$apk" >> "$GITHUB_OUTPUT"
+          sha256sum "$apk"
+
+      - name: Inspect built APK
+        id: metadata
+        shell: bash
+        env:
+          APK_FILE: ${{ steps.apk.outputs.path }}
+          PACKAGE_OVERRIDE: ${{ inputs.package_name }}
+          COMPONENT_OVERRIDE: ${{ inputs.launch_component }}
+        run: |
+          set -euo pipefail
+          aapt="$(find "$ANDROID_HOME/build-tools" -type f -name aapt -perm -111 | sort -V | tail -n 1)"
+          badging="$("$aapt" dump badging "$APK_FILE")"
+          package_name="$PACKAGE_OVERRIDE"
+          launch_component="$COMPONENT_OVERRIDE"
+          [[ -z "$package_name" ]] &&
+            package_name="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging" | head -n 1)"
+          if [[ -z "$launch_component" ]]; then
+            activity="$(sed -n "s/^launchable-activity: name='\([^']*\)'.*/\1/p" <<<"$badging" | head -n 1)"
+            [[ -n "$activity" ]] && launch_component="$package_name/$activity"
+          fi
+          test -n "$package_name"
+
+          mkdir prepared-apk
+          cp "$APK_FILE" prepared-apk/app-under-test.apk
+          echo "package_name=$package_name" >> "$GITHUB_OUTPUT"
+          echo "launch_component=$launch_component" >> "$GITHUB_OUTPUT"
+          {
+            echo "### BUILD — ZIP source"
+            echo "- BUILD: PASS"
+            echo "- Debug APK: \`$APK_FILE\`"
+            echo "- Package: \`$package_name\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload built APK for runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk-built
+          path: prepared-apk/app-under-test.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  runtime-direct:
+    name: RUNTIME — APK / API30 full + API31 smoke
+    needs: resolve-asset
+    if: needs.resolve-asset.outputs.asset_type == 'apk'
+    uses: ./.github/workflows/android-runtime-test.yml
+    with:
+      apk_artifact_name: release-apk-direct
+      apk_path: app-under-test.apk
+      package_name: ${{ needs.resolve-asset.outputs.package_name }}
+      launch_component: ${{ needs.resolve-asset.outputs.launch_component }}
+      functional_test_script: runtime-tests/release-asset-runtime.sh
+
+  runtime-built:
+    name: RUNTIME — ZIP build / API30 full + API31 smoke
+    needs: [resolve-asset, build-source]
+    if: needs.resolve-asset.outputs.asset_type == 'zip' && needs.build-source.result == 'success'
+    uses: ./.github/workflows/android-runtime-test.yml
+    with:
+      apk_artifact_name: release-apk-built
+      apk_path: app-under-test.apk
+      package_name: ${{ needs.build-source.outputs.package_name }}
+      launch_component: ${{ needs.build-source.outputs.launch_component }}
+      functional_test_script: runtime-tests/release-asset-runtime.sh
