@@ -81,9 +81,8 @@ jobs:
     env:
       HOST_ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       RUNTIME_SDK_ROOT: /home/runner/.android-runtime-sdk
-      ANDROID_HOME: ${{ runner.temp }}/android-runtime-sdk
-      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-runtime-sdk
-      ANDROID_AVD_HOME: ${{ runner.temp }}/android-runtime-avd
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       AVD_NAME: runtime-api-${{ matrix.api }}
       SYSTEM_IMAGE: system-images;android-${{ matrix.api }};google_apis;x86_64
       EMULATOR_SERIAL: emulator-5554
@@ -123,8 +122,8 @@ jobs:
             ~/.android-runtime-sdk/emulator
             ~/.android-runtime-sdk/cmdline-tools/latest
             ~/.android-runtime-sdk/system-images/android-${{ matrix.api }}/google_apis/x86_64
-            ${{ runner.temp }}/android-runtime-avd/runtime-api-${{ matrix.api }}.avd
-            ${{ runner.temp }}/android-runtime-avd/runtime-api-${{ matrix.api }}.ini
+            ~/.android/avd/runtime-api-${{ matrix.api }}.avd
+            ~/.android/avd/runtime-api-${{ matrix.api }}.ini
           key: android-avd-snapshot-v3-${{ runner.os }}-${{ runner.arch }}-api${{ matrix.api }}-google-apis-x86_64
 
       - name: Report AVD cache result
@@ -168,7 +167,7 @@ jobs:
         run: |
           set -euxo pipefail
           export PATH="$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-          rm -rf "$ANDROID_AVD_HOME/$AVD_NAME.avd" "$ANDROID_AVD_HOME/$AVD_NAME.ini"
+          rm -rf "$HOME/.android/avd/$AVD_NAME.avd" "$HOME/.android/avd/$AVD_NAME.ini"
           echo "no" | avdmanager create avd --force --name "$AVD_NAME" --package "$SYSTEM_IMAGE" --device "pixel_2"
           test "$(emulator -list-avds | grep -Fx "$AVD_NAME")" = "$AVD_NAME"
 
