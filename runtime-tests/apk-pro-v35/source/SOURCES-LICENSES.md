@@ -1,4 +1,4 @@
-# Sources / licenses — APK PRO v35
+# Sources / licenses — APK PRO v36
 
 Source ZIP này không nhúng JDK, Android SDK platform, Gradle distribution hoặc native ARM64 toolchain binary payload lớn.
 

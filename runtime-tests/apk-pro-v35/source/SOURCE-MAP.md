@@ -1,4 +1,4 @@
-# Source map — APK PRO v35
+# Source map — APK PRO v36
 
 - `app/src/main/java/com/longdev/apkbuilder/MainActivity.java` — UI, source/PATCH flow, first-launch toolchain prompt, menu download, Toolchain Pack import/export.
 - `app/src/main/java/com/longdev/apkbuilder/core/ToolchainManager.java` — Core v2 manifest, ARM64 first-use provisioning, staging/validation/rollback/cache.

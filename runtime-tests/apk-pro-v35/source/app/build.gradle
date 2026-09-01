@@ -10,9 +10,9 @@ android {
     defaultConfig {
         applicationId 'com.apkbld'
         minSdk 30
-        targetSdk 31
-        versionCode 35
-        versionName '35'
+        targetSdk 33
+        versionCode 36
+        versionName '36'
     }
 
     compileOptions {

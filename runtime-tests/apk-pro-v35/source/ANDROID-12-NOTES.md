@@ -1,7 +1,7 @@
-# Android 11/12 notes — APK PRO v35
+# Android 11/12 notes — APK PRO v36
 
 - minSdk 30: Android 11 trở lên.
-- targetSdk 31: Android 12 behavior contract.
+- targetSdk 33: mức tối thiểu để Release lint của toolchain hiện tại chấp nhận; minSdk 30 vẫn giữ hỗ trợ Android 11/12.
 - compileSdk 37: chỉ là API compile của toolchain mới, không tự thêm behavior Android mới.
 - MainActivity launcher exported=true: hợp yêu cầu Android 12 cho component có intent-filter.
 - BuildService exported=false: service nội bộ.

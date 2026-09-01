@@ -1,4 +1,4 @@
-name: APK PRO v35 CI
+name: APK PRO v36 Release Gate
 
 on:
   push:
@@ -24,11 +24,11 @@ jobs:
         with:
           gradle-version: '9.5.0'
       - uses: android-actions/setup-android@v3
-      - name: Stage complete APK PRO v35 source without signing material
+      - name: Stage complete APK PRO v36 source without private signing material
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="$RUNNER_TEMP/apk-pro-v35"
+          ROOT="$RUNNER_TEMP/apk-pro-v36"
           rm -rf "$ROOT"
           mkdir -p "$ROOT"
           cp -a runtime-tests/apk-pro-v35/source/. "$ROOT/"
@@ -36,17 +36,17 @@ jobs:
             cd "$ROOT"
             sha256sum -c "$GITHUB_WORKSPACE/runtime-tests/apk-pro-v35/source-ci.sha256"
           )
-          # CI-only after exact-hash verification: launcher PNGs and JKS are not committed.
-          sed -i '/android:icon="@mipmap\/ic_launcher"/d;/android:roundIcon="@mipmap\/ic_launcher_round"/d' "$ROOT/app/src/main/AndroidManifest.xml"
           echo "ROOT=$ROOT" >> "$GITHUB_ENV"
-      - name: Verify declared toolchain
+      - name: Verify declared toolchain and version
         shell: bash
         run: |
           set -euo pipefail
           grep -F "version '9.3.2'" "$ROOT/build.gradle"
           grep -F "compileSdk 37" "$ROOT/app/build.gradle"
+          grep -F "targetSdk 33" "$ROOT/app/build.gradle"
           grep -F "buildToolsVersion '36.0.0'" "$ROOT/app/build.gradle"
-          grep -F "versionCode 35" "$ROOT/app/build.gradle"
+          grep -F "versionCode 36" "$ROOT/app/build.gradle"
+          grep -F "versionName '36'" "$ROOT/app/build.gradle"
           gradle --version
       - name: Install exact Android SDK packages
         shell: bash
@@ -56,21 +56,30 @@ jobs:
           sdkmanager --channel=3 'platforms;android-37.0' 'build-tools;36.0.0'
           test -f "$ANDROID_HOME/platforms/android-37.0/android.jar"
           test -f "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar"
-      - name: Build Debug APK
+      - name: Build Debug and unsigned Release APK
         shell: bash
         run: |
           set -euo pipefail
           cd "$ROOT"
-          gradle clean assembleDebug --no-daemon --console=plain --stacktrace
-          APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n1)"
-          test -f "$APK"
+          gradle clean assembleDebug assembleRelease --no-daemon --console=plain --stacktrace
+          DEBUG_APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n1)"
+          RELEASE_APK="$(find app/build/outputs/apk/release -type f -name '*.apk' | head -n1)"
+          test -f "$DEBUG_APK"
+          test -f "$RELEASE_APK"
           mkdir -p "$RUNNER_TEMP/apk-out"
-          cp "$APK" "$RUNNER_TEMP/apk-out/APK-PRO-v35-debug.apk"
-          sha256sum "$RUNNER_TEMP/apk-out/APK-PRO-v35-debug.apk"
+          cp "$DEBUG_APK" "$RUNNER_TEMP/apk-out/APK-PRO-v36-debug.apk"
+          cp "$RELEASE_APK" "$RUNNER_TEMP/apk-out/APK-PRO-v36-release-unsigned.apk"
+          sha256sum "$RUNNER_TEMP/apk-out/"*.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: apk-pro-v35-debug
-          path: ${{ runner.temp }}/apk-out/APK-PRO-v35-debug.apk
+          name: apk-pro-v36-debug
+          path: ${{ runner.temp }}/apk-out/APK-PRO-v36-debug.apk
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-pro-v36-release-unsigned
+          path: ${{ runner.temp }}/apk-out/APK-PRO-v36-release-unsigned.apk
           if-no-files-found: error
           retention-days: 1
 
@@ -78,8 +87,8 @@ jobs:
     needs: build
     uses: ./.github/workflows/android-runtime-test.yml
     with:
-      apk_artifact_name: apk-pro-v35-debug
+      apk_artifact_name: apk-pro-v36-debug
       package_name: com.apkbld
       launch_component: com.apkbld/com.longdev.apkbuilder.MainActivity
 
-# Test request: APK-PRO-v35 baseline SHA-256 4fd79f1ce82f7d1c7fd1f89e3e09971de5e408b6ec82413bd75070f04e9bfa99
+# Release gate for baseline APK-PRO-v35(1).zip SHA-256 4fd79f1ce82f7d1c7fd1f89e3e09971de5e408b6ec82413bd75070f04e9bfa99

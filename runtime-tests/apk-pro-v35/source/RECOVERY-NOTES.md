@@ -1,4 +1,4 @@
-# Recovery notes — APK PRO v35
+# Recovery notes — APK PRO v36
 
 - Fresh install ARM64 tự setup core khi build/RUN lần đầu; cần mạng.
 - Download dùng `.part`; file chưa hoàn tất không được coi là cache hợp lệ.

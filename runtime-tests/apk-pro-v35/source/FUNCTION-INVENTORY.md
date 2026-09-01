@@ -1,4 +1,4 @@
-# FUNCTION INVENTORY — APK PRO v35
+# FUNCTION INVENTORY — APK PRO v36
 
 Every production function below has a matching row in `TEST-MATRIX.md`.
 

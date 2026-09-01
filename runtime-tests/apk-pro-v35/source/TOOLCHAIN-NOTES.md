@@ -1,4 +1,4 @@
-# APK PRO v35 — Lightweight ARM64 toolchain
+# APK PRO v36 — Lightweight ARM64 toolchain
 
 ## Core v2
 Core chạy trong app-private `files/usr` và gồm JDK17 + native ARM64 tools cần cho Android build. Không nhúng payload lớn vào APK.
@@ -43,4 +43,3 @@ Fresh install cần mạng. Sau khi core/SDK/Gradle/dependency đã cache, APK P
 
 ## Activation gate
 Core chỉ được đánh dấu READY sau khi file bắt buộc tồn tại và runtime smoke khởi chạy được: JDK17 `java/javac/keytool`, `aapt2`, `aidl`, `zipalign`. Nếu upstream `aapt` không còn cung cấp `zipalign`, staging fail và live Core cũ được giữ/rollback; không ghi PASS giả.
-

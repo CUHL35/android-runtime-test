@@ -23,7 +23,7 @@ import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
 /**
- * APK PRO v35 lightweight ARM64 bootstrap manager.
+ * APK PRO v36 lightweight ARM64 bootstrap manager.
  *
  * Nothing large is embedded in APK PRO. A small official ARM64 bootstrap is downloaded once,
  * then Android-native JDK/build tools are resolved from the signed ARM64 package feed repository and

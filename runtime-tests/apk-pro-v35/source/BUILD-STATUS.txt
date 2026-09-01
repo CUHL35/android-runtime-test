@@ -1,21 +1,23 @@
-APK PRO v35 BUILD STATUS
+APK PRO v36 BUILD STATUS
 
-Baseline source: APK-PRO-v34.zip
-Baseline SHA-256: 7e5a9a107167a91bab032390da0428ceebbe6eee802aaabb8f9a6194ae948d95
+Baseline source: APK-PRO-v35(1).zip
+Baseline SHA-256: 4fd79f1ce82f7d1c7fd1f89e3e09971de5e408b6ec82413bd75070f04e9bfa99
 
-versionName: 35
-versionCode: 35
+versionName: 36
+versionCode: 36
 applicationId: com.apkbld
 namespace: com.longdev.apkbuilder
 compileSdk: 37
 minSdk: 30
-targetSdk: 31
+targetSdk: 33
 AGP: 9.3.2
 Gradle wrapper: 9.5.0
 Build Tools façade: 36.0.0
 Gradle runtime JDK: 17
 
 Changes:
+- Fixed the confirmed Release-only blocker: `lintVitalRelease` rejected targetSdk 31 with `ExpiredTargetSdkVersion`.
+- Raised targetSdk only to the lint-required API 33; minSdk 30, compileSdk 37, package, signing material, UI and production behavior remain unchanged.
 - Fixed build blocker confirmed on device: AGP `9.4.0` final is not published in Google Maven (404); pinned current stable AGP `9.3.2`.
 - Replaced nonexistent Gradle `9.6.0` final wrapper target with AGP 9.3 default Gradle `9.5.0`; pinned official Gradle SHA-256.
 - Fixed API 37 platform coordinate: compileSdk 37 now resolves stable `platforms;android-37.0` and caches `platforms/android-37.0`.

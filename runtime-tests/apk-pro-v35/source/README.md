@@ -1,16 +1,16 @@
-# APK PRO v35
+# APK PRO v36
 
 APK builder chạy trực tiếp trên Android ARM64, tập trung Android 11 (API 30) và Android 12 (API 31).
 
-## App build baseline v35
+## App build baseline v36
 - JDK runtime cho Gradle: 17
 - Android Gradle Plugin: 9.3.2
 - Gradle Wrapper: 9.5.0
 - Build Tools façade: 36.0.0
 - compileSdk: 37
 - minSdk: 30
-- targetSdk: 31
-- versionName/versionCode: `35` / `35`
+- targetSdk: 33
+- versionName/versionCode: `36` / `36`
 - applicationId: `com.apkbld`
 - namespace: `com.longdev.apkbuilder`
 
