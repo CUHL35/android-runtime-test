@@ -21,29 +21,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('.github/workflows/release-asset-runtime-test.yml')
-          text = path.read_text()
-          old = '''            while IFS= read -r file; do
-              if grep -Eq "com\\.android\\.application|apply[[:space:]]+plugin:[[:space:]]*['\\\"]com\\.android\\.application['\\\"]" "$file" &&
-                 ! grep -Eq "com\\.android\\.application['\\\"]?\\)?[[:space:]]+apply[[:space:]]+false" "$file"; then
-                dir="$(dirname "$file")"
-'''
-          new = '''            while IFS= read -r file; do
-              if grep -Eq "apply[[:space:]]+plugin:[[:space:]]*['\\\"]com\\.android\\.application['\\\"]" "$file" ||
-                 grep -E "id[[:space:]]*(\\([[:space:]]*)?['\\\"]com\\.android\\.application['\\\"]" "$file" |
-                   grep -Ev "apply[[:space:]]+false" >/dev/null; then
-                dir="$(dirname "$file")"
-'''
-          if old not in text:
-              raise SystemExit('expected detector block not found; refusing blind patch')
-          updated = text.replace(old, new, 1)
-          if updated == text:
-              raise SystemExit('no change made')
-          path.write_text(updated)
-          PY
+          python3 -c "from pathlib import Path; import base64; p=Path('.github/workflows/release-asset-runtime-test.yml'); s=p.read_text(); old=base64.b64decode('ICAgICAgICAgICAgICBpZiBncmVwIC1FcSAiY29tXC5hbmRyb2lkXC5hcHBsaWNhdGlvbnxhcHBseVtbOnNwYWNlOl1dK3BsdWdpbjpbWzpzcGFjZTpdXSpbJ1wiXWNvbVwuYW5kcm9pZFwuYXBwbGljYXRpb25bJ1wiXSIgIiRmaWxlIiAmJgogICAgICAgICAgICAgICAgICEgZ3JlcCAtRXEgImNvbVwuYW5kcm9pZFwuYXBwbGljYXRpb25bJ1wiXT9cKT9bWzpzcGFjZTpdXSthcHBseVtbOnNwYWNlOl1dK2ZhbHNlIiAiJGZpbGUiOyB0aGVu').decode(); new=base64.b64decode('ICAgICAgICAgICAgICBpZiBncmVwIC1FcSAiYXBwbHlbWzpzcGFjZTpdXStwbHVnaW46W1s6c3BhY2U6XV0qWydcIl1jb21cLmFuZHJvaWRcLmFwcGxpY2F0aW9uWydcIl0iICIkZmlsZSIgfHwKICAgICAgICAgICAgICAgICBncmVwIC1FICJpZFtbOnNwYWNlOl1dKihcKFtbOnNwYWNlOl1dKik/WydcIl1jb21cLmFuZHJvaWRcLmFwcGxpY2F0aW9uWydcIl0iICIkZmlsZSIgfAogICAgICAgICAgICAgICAgICAgZ3JlcCAtRXYgImFwcGx5W1s6c3BhY2U6XV0rZmFsc2UiID4vZGV2L251bGw7IHRoZW4=').decode(); assert old in s, 'expected detector block not found'; p.write_text(s.replace(old,new,1))"
           git diff --check
           git diff -- .github/workflows/release-asset-runtime-test.yml
 
