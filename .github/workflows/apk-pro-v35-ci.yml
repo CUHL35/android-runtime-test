@@ -32,12 +32,12 @@ jobs:
           rm -rf "$ROOT"
           mkdir -p "$ROOT"
           cp -a runtime-tests/apk-pro-v35/source/. "$ROOT/"
-          # CI-only: launcher PNGs and JKS are not committed; remove icon refs.
-          sed -i '/android:icon="@mipmap\/ic_launcher"/d;/android:roundIcon="@mipmap\/ic_launcher_round"/d' "$ROOT/app/src/main/AndroidManifest.xml"
           (
             cd "$ROOT"
             sha256sum -c "$GITHUB_WORKSPACE/runtime-tests/apk-pro-v35/source-ci.sha256"
           )
+          # CI-only after exact-hash verification: launcher PNGs and JKS are not committed.
+          sed -i '/android:icon="@mipmap\/ic_launcher"/d;/android:roundIcon="@mipmap\/ic_launcher_round"/d' "$ROOT/app/src/main/AndroidManifest.xml"
           echo "ROOT=$ROOT" >> "$GITHUB_ENV"
       - name: Verify declared toolchain
         shell: bash
