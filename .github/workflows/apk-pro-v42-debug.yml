@@ -82,7 +82,7 @@ jobs:
           check_sha f617aaca6a07a5b7ce3c75dd993edd789c0f32f02814797cf1ac71a0c20fa76c app/src/main/java/com/longdev/apkbuilder/core/SigningData.java
           check_sha 59838cf8664055ea4a6a3b9eccf9d6d1e5617234de7808a479fa8545aabcbc8c app/src/main/assets/engine/run-build.sh
           check_sha 2a984910ca4e1666a9269e6914758f5d6b407f9fbbe3b9166b807a54311c4544 app/src/main/assets/engine/provision-packages.sh
-          test "$(find app/src/main/java -type f -name '*.java' | wc -l)" -eq 25
+          test "$(find app/src/main/java -type f -name '*.java' | wc -l)" -eq 28
           echo "ROOT=$ROOT" >> "$GITHUB_ENV"
 
       - name: Build Release unsigned
