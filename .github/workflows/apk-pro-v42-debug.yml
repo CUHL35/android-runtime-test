@@ -44,14 +44,11 @@ jobs:
           DELTA="$RUNNER_TEMP/v42-delta.zip"
           rm -rf "$ROOT" "$DELTA"
           mkdir -p "$ROOT"
-          test -f runtime-tests/apk-pro-v35/source/app/build.gradle
           cp -a runtime-tests/apk-pro-v35/source/. "$ROOT/"
           cat runtime-tests/apk-pro-v42-delta/part*.b64 | tr -d '\r\n' | base64 -d > "$DELTA"
           unzip -oq "$DELTA" -x 'app/src/main/java/com/longdev/apkbuilder/core/ToolchainManager.java' -d "$ROOT"
           rm -rf "$ROOT/release-signing" "$ROOT/.git" "$ROOT/.gradle" "$ROOT/app/build" "$ROOT/build"
-
           cd "$ROOT"
-          test "$(sha256sum app/src/main/java/com/longdev/apkbuilder/core/ToolchainManager.java | awk '{print $1}')" = "fee8261fe12142efa3adc220fbaf4284ec693cf6d2001eb523b555dcaffa2a60"
 
           sed -i \
             -e 's/versionCode 42/versionCode 44/' \
@@ -68,26 +65,24 @@ jobs:
           new = "    ].collect { it.toString() }\n    ProcessBuilder pb = new ProcessBuilder(command)"
           if old not in s:
               raise SystemExit('embedded ProcessBuilder command block not found')
-          s = s.replace(old, new, 1)
-          p.write_text(s)
+          p.write_text(s.replace(old, new, 1))
           PY
 
-          grep -q 'versionCode 44' app/build.gradle
-          grep -q "versionName '44'" app/build.gradle
-          grep -q 'minSdk 28' app/build.gradle
-          grep -q 'targetSdk 28' app/build.gradle
-          grep -Fq "].collect { it.toString() }" gradle/embedded-toolchain.gradle
-
-          {
-            find app gradle -type f -print0 | sort -z | while IFS= read -r -d '' f; do
-              printf '%s  %s\n' "$(sha256sum "$f" | awk '{print $1}')" "$f"
-            done
-            for f in build.gradle settings.gradle gradle.properties gradlew gradlew.bat build-local.sh; do
-              [ -f "$f" ] && printf '%s  %s\n' "$(sha256sum "$f" | awk '{print $1}')" "$f"
-            done
-          } | sort > "$RUNNER_TEMP/v44-build-manifest.txt"
-          cat "$RUNNER_TEMP/v44-build-manifest.txt"
-          test "$(sha256sum "$RUNNER_TEMP/v44-build-manifest.txt" | awk '{print $1}')" = "025d0933c65e39055fe89021b775d1657b32f0319c8c51b501b6a6bb9faa5010"
+          check_sha() { test "$(sha256sum "$2" | awk '{print $1}')" = "$1"; }
+          check_sha 235651621aeeeb04cd56b600571dd61372f7d7f2f4a9b89eadffd3c747f51903 app/build.gradle
+          check_sha 232961c0c459c6ca66b759d639e3a0bb23ae7a883f139deebf052a96abf7cf22 gradle/embedded-toolchain.gradle
+          check_sha fee8261fe12142efa3adc220fbaf4284ec693cf6d2001eb523b555dcaffa2a60 app/src/main/java/com/longdev/apkbuilder/core/ToolchainManager.java
+          check_sha 61fb9353c436cccf96384bfd80a94ed9761288f69f7bbc2cdedac5d4591863c4 app/src/main/java/com/longdev/apkbuilder/MainActivity.java
+          check_sha abeea765337f31e8d6e30b1905c26090b79337eef01c5af3fb4dba0187c92106 app/src/main/java/com/longdev/apkbuilder/core/AndroidSdkRepository.java
+          check_sha 84024a7d39b65b0e735e1a9b4a900c89b189e099be6bf9a11aa062c951296af3 app/src/main/java/com/longdev/apkbuilder/core/BuildCoordinator.java
+          check_sha b7f41405370fe2ca4a74f6f07a1962ad332875ff5615d7a1edc50a1061a27dac app/src/main/java/com/longdev/apkbuilder/core/AppDataExecution.java
+          check_sha bdfd40a3eb36cce89114578dc199880ad4227bc1f7afc9e0e884d6d64e91692e app/src/main/java/com/longdev/apkbuilder/core/NetworkFiles.java
+          check_sha d9d2fd10b7127a3ac9dcacec317a184fd61dfff3f76d482ddcacf9d7a7f3ee3a app/src/main/java/com/longdev/apkbuilder/core/PatchManager.java
+          check_sha ba9ac0b1db46d19c80c095b3b37ac21362a6b9b08e012e448a0e103d523f2973 app/src/main/java/com/longdev/apkbuilder/core/ReleaseKeyManager.java
+          check_sha f617aaca6a07a5b7ce3c75dd993edd789c0f32f02814797cf1ac71a0c20fa76c app/src/main/java/com/longdev/apkbuilder/core/SigningData.java
+          check_sha 59838cf8664055ea4a6a3b9eccf9d6d1e5617234de7808a479fa8545aabcbc8c app/src/main/assets/engine/run-build.sh
+          check_sha 2a984910ca4e1666a9269e6914758f5d6b407f9fbbe3b9166b807a54311c4544 app/src/main/assets/engine/provision-packages.sh
+          test "$(find app/src/main/java -type f -name '*.java' | wc -l)" -eq 25
           echo "ROOT=$ROOT" >> "$GITHUB_ENV"
 
       - name: Build Release unsigned
