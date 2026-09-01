@@ -1,11 +1,10 @@
-name: APK PRO W^X Debug
+name: APK PRO v44 Release
 
 on:
   push:
-    branches: [apk-pro-v42-debug]
+    branches: [apk-pro-v44-release]
     paths:
       - '.github/workflows/apk-pro-v42-debug.yml'
-      - 'runtime-tests/apk-pro-v42-delta/**'
 
 permissions:
   contents: read
@@ -37,11 +36,11 @@ jobs:
           test -f "$ANDROID_HOME/platforms/android-37.0/android.jar"
           test -f "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar"
 
-      - name: Stage APK PRO source + W^X fix
+      - name: Stage exact APK PRO v44 build source
         shell: bash
         run: |
           set -euxo pipefail
-          ROOT="$RUNNER_TEMP/apk-pro-wxfix"
+          ROOT="$RUNNER_TEMP/apk-pro-v44"
           DELTA="$RUNNER_TEMP/v42-delta.zip"
           rm -rf "$ROOT" "$DELTA"
           mkdir -p "$ROOT"
@@ -50,50 +49,72 @@ jobs:
           cat runtime-tests/apk-pro-v42-delta/part*.b64 | tr -d '\r\n' | base64 -d > "$DELTA"
           unzip -oq "$DELTA" -x 'app/src/main/java/com/longdev/apkbuilder/core/ToolchainManager.java' -d "$ROOT"
           rm -rf "$ROOT/release-signing" "$ROOT/.git" "$ROOT/.gradle" "$ROOT/app/build" "$ROOT/build"
+
+          cd "$ROOT"
+          test "$(sha256sum app/src/main/java/com/longdev/apkbuilder/core/ToolchainManager.java | awk '{print $1}')" = "fee8261fe12142efa3adc220fbaf4284ec693cf6d2001eb523b555dcaffa2a60"
+
           sed -i \
-            -e 's/versionCode 42/versionCode 43/' \
-            -e "s/versionName '42'/versionName '43'/" \
+            -e 's/versionCode 42/versionCode 44/' \
+            -e "s/versionName '42'/versionName '44'/" \
             -e 's/minSdk 30/minSdk 28/' \
             -e 's/targetSdk 33/targetSdk 28/' \
-            "$ROOT/app/build.gradle"
-          grep -E 'versionCode|versionName|minSdk|targetSdk|compileSdk' "$ROOT/app/build.gradle"
-          grep -q 'versionCode 43' "$ROOT/app/build.gradle"
-          grep -q "versionName '43'" "$ROOT/app/build.gradle"
-          grep -q 'minSdk 28' "$ROOT/app/build.gradle"
-          grep -q 'targetSdk 28' "$ROOT/app/build.gradle"
+            app/build.gradle
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('gradle/embedded-toolchain.gradle')
+          s = p.read_text()
+          old = "    ]\n    ProcessBuilder pb = new ProcessBuilder(command)"
+          new = "    ].collect { it.toString() }\n    ProcessBuilder pb = new ProcessBuilder(command)"
+          if old not in s:
+              raise SystemExit('embedded ProcessBuilder command block not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
+          grep -q 'versionCode 44' app/build.gradle
+          grep -q "versionName '44'" app/build.gradle
+          grep -q 'minSdk 28' app/build.gradle
+          grep -q 'targetSdk 28' app/build.gradle
+          grep -Fq "].collect { it.toString() }" gradle/embedded-toolchain.gradle
+
+          {
+            find app gradle -type f -print0 | sort -z | while IFS= read -r -d '' f; do
+              printf '%s  %s\n' "$(sha256sum "$f" | awk '{print $1}')" "$f"
+            done
+            for f in build.gradle settings.gradle gradle.properties gradlew gradlew.bat build-local.sh; do
+              [ -f "$f" ] && printf '%s  %s\n' "$(sha256sum "$f" | awk '{print $1}')" "$f"
+            done
+          } | sort > "$RUNNER_TEMP/v44-build-manifest.txt"
+          cat "$RUNNER_TEMP/v44-build-manifest.txt"
+          test "$(sha256sum "$RUNNER_TEMP/v44-build-manifest.txt" | awk '{print $1}')" = "025d0933c65e39055fe89021b775d1657b32f0319c8c51b501b6a6bb9faa5010"
           echo "ROOT=$ROOT" >> "$GITHUB_ENV"
 
-      - name: Build Debug
+      - name: Build Release unsigned
         shell: bash
         run: |
           set -euxo pipefail
           cd "$ROOT"
-          gradle clean assembleDebug --no-daemon --console=plain --stacktrace
-          APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n1)"
+          gradle clean assembleRelease --no-daemon --console=plain --stacktrace
+          APK="$(find app/build/outputs/apk/release -type f -name '*.apk' | head -n1)"
           test -f "$APK"
           mkdir -p "$RUNNER_TEMP/apk-out"
-          cp "$APK" "$RUNNER_TEMP/apk-out/APK-PRO-v43-wxfix-debug.apk"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$RUNNER_TEMP/apk-out/APK-PRO-v43-wxfix-debug.apk" | tee "$RUNNER_TEMP/apk-out/badging.txt"
+          cp "$APK" "$RUNNER_TEMP/apk-out/APK-PRO-v44-release-unsigned.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee "$RUNNER_TEMP/apk-out/badging.txt"
+          grep -q "package: name='com.apkbld'" "$RUNNER_TEMP/apk-out/badging.txt"
+          grep -q "versionCode='44'" "$RUNNER_TEMP/apk-out/badging.txt"
           grep -q "sdkVersion:'28'" "$RUNNER_TEMP/apk-out/badging.txt"
           grep -q "targetSdkVersion:'28'" "$RUNNER_TEMP/apk-out/badging.txt"
-          sha256sum "$RUNNER_TEMP/apk-out/APK-PRO-v43-wxfix-debug.apk"
-
-      - name: Export clean source ZIP
-        shell: bash
-        run: |
-          set -euxo pipefail
-          rm -rf "$ROOT/.gradle" "$ROOT/app/build" "$ROOT/build"
-          cd "$ROOT"
-          zip -qr "$RUNNER_TEMP/apk-out/APK-PRO-v43-SOURCE-NOKEY.zip" . \
-            -x '.git/*' '.gradle/*' 'app/build/*' 'build/*' '*.apk' '*.aab'
-          unzip -tqq "$RUNNER_TEMP/apk-out/APK-PRO-v43-SOURCE-NOKEY.zip"
-          sha256sum "$RUNNER_TEMP/apk-out/APK-PRO-v43-SOURCE-NOKEY.zip"
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$APK"
+          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" "$RUNNER_TEMP/apk-out/apksigner-36.0.0.jar"
+          sha256sum "$RUNNER_TEMP/apk-out/APK-PRO-v44-release-unsigned.apk" "$RUNNER_TEMP/apk-out/apksigner-36.0.0.jar"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: APK-PRO-v43-wxfix-bundle
+          name: APK-PRO-v44-release-unsigned
           path: |
-            ${{ runner.temp }}/apk-out/APK-PRO-v43-wxfix-debug.apk
-            ${{ runner.temp }}/apk-out/APK-PRO-v43-SOURCE-NOKEY.zip
+            ${{ runner.temp }}/apk-out/APK-PRO-v44-release-unsigned.apk
+            ${{ runner.temp }}/apk-out/apksigner-36.0.0.jar
+            ${{ runner.temp }}/apk-out/badging.txt
           if-no-files-found: error
           retention-days: 1
