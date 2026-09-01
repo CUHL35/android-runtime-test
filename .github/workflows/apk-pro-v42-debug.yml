@@ -49,7 +49,7 @@ jobs:
           cp -a runtime-tests/apk-pro-v35/source/. "$ROOT/"
           cat runtime-tests/apk-pro-v42-delta/part*.b64 | tr -d '\r\n' | base64 -d > "$DELTA"
           unzip -oq "$DELTA" -x 'app/src/main/java/com/longdev/apkbuilder/core/ToolchainManager.java' -d "$ROOT"
-          rm -rf "$ROOT/release-signing"
+          rm -rf "$ROOT/release-signing" "$ROOT/.git" "$ROOT/.gradle" "$ROOT/app/build" "$ROOT/build"
           sed -i \
             -e 's/versionCode 42/versionCode 43/' \
             -e "s/versionName '42'/versionName '43'/" \
@@ -78,9 +78,22 @@ jobs:
           grep -q "targetSdkVersion:'28'" "$RUNNER_TEMP/apk-out/badging.txt"
           sha256sum "$RUNNER_TEMP/apk-out/APK-PRO-v43-wxfix-debug.apk"
 
+      - name: Export clean source ZIP
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf "$ROOT/.gradle" "$ROOT/app/build" "$ROOT/build"
+          cd "$ROOT"
+          zip -qr "$RUNNER_TEMP/apk-out/APK-PRO-v43-SOURCE-NOKEY.zip" . \
+            -x '.git/*' '.gradle/*' 'app/build/*' 'build/*' '*.apk' '*.aab'
+          unzip -tqq "$RUNNER_TEMP/apk-out/APK-PRO-v43-SOURCE-NOKEY.zip"
+          sha256sum "$RUNNER_TEMP/apk-out/APK-PRO-v43-SOURCE-NOKEY.zip"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: APK-PRO-v43-wxfix-debug
-          path: ${{ runner.temp }}/apk-out/APK-PRO-v43-wxfix-debug.apk
+          name: APK-PRO-v43-wxfix-bundle
+          path: |
+            ${{ runner.temp }}/apk-out/APK-PRO-v43-wxfix-debug.apk
+            ${{ runner.temp }}/apk-out/APK-PRO-v43-SOURCE-NOKEY.zip
           if-no-files-found: error
           retention-days: 1
