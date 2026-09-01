@@ -1,0 +1,81 @@
+name: APK PRO v35 CI
+
+on:
+  push:
+    branches: [apk-pro-v35-ci]
+    paths:
+      - '.github/workflows/apk-pro-v35-ci.yml'
+      - 'runtime-tests/apk-pro-v35/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+      - uses: android-actions/setup-android@v3
+      - name: Materialize APK PRO v35 source without signing material
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/apk-pro-v35"
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          for s in runtime-tests/apk-pro-v35/materialize-v35-*.sh; do
+            bash "$s" "$ROOT"
+          done
+          # CI-only: launcher PNGs are not committed; remove icon refs. Production source is unchanged.
+          sed -i '/android:icon="@mipmap\/ic_launcher"/d;/android:roundIcon="@mipmap\/ic_launcher_round"/d' "$ROOT/app/src/main/AndroidManifest.xml"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+      - name: Verify declared toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F "version '9.3.2'" "$ROOT/build.gradle"
+          grep -F "compileSdk 37" "$ROOT/app/build.gradle"
+          grep -F "buildToolsVersion '36.0.0'" "$ROOT/app/build.gradle"
+          grep -F "versionCode 35" "$ROOT/app/build.gradle"
+          gradle --version
+      - name: Install exact Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --channel=3 'platforms;android-37.0' 'build-tools;36.0.0'
+          test -f "$ANDROID_HOME/platforms/android-37.0/android.jar"
+          test -f "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar"
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$ROOT"
+          gradle clean assembleDebug --no-daemon --console=plain --stacktrace
+          APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n1)"
+          test -f "$APK"
+          mkdir -p "$RUNNER_TEMP/apk-out"
+          cp "$APK" "$RUNNER_TEMP/apk-out/APK-PRO-v35-debug.apk"
+          sha256sum "$RUNNER_TEMP/apk-out/APK-PRO-v35-debug.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-pro-v35-debug
+          path: ${{ runner.temp }}/apk-out/APK-PRO-v35-debug.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  runtime:
+    needs: build
+    uses: ./.github/workflows/android-runtime-test.yml
+    with:
+      apk_artifact_name: apk-pro-v35-debug
+      package_name: com.apkbld
+      launch_component: com.apkbld/com.longdev.apkbuilder.MainActivity
