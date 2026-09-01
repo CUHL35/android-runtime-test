@@ -1,0 +1,230 @@
+name: Release Asset Runtime Self-Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/android-runtime-test]
+    paths:
+      - .github/workflows/release-asset-runtime-selftest.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  prepare-release-assets:
+    name: Prepare real APK and ZIP Release assets
+    runs-on: ubuntu-22.04
+    outputs:
+      apk_tag: ${{ steps.release.outputs.apk_tag }}
+      zip_tag: ${{ steps.release.outputs.zip_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK for fixture creation only
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle for fixture creation only
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Set up Android SDK for fixture creation only
+        uses: android-actions/setup-android@v3
+
+      - name: Create one-project Android source fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/runtime-fixture" "$RUNNER_TEMP/wrapper-seed"
+          project="$RUNNER_TEMP/runtime-fixture"
+          seed="$RUNNER_TEMP/wrapper-seed"
+          mkdir -p "$project/app/src/main/java/com/cuhl35/runtimefixture" "$seed"
+
+          cat > "$project/settings.gradle" <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = 'RuntimeFixture'
+          include ':app'
+          EOF
+
+          cat > "$project/build.gradle" <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          EOF
+
+          cat > "$project/app/build.gradle" <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.cuhl35.runtimefixture'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.cuhl35.runtimefixture'
+                  minSdk 23
+                  targetSdk 31
+                  versionCode 1
+                  versionName '1.0'
+              }
+          }
+          EOF
+
+          cat > "$project/app/src/main/AndroidManifest.xml" <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="false"
+                  android:label="Runtime Fixture"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > "$project/app/src/main/java/com/cuhl35/runtimefixture/MainActivity.java" <<'EOF'
+          package com.cuhl35.runtimefixture;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.widget.TextView;
+
+          public class MainActivity extends Activity {
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  TextView text = new TextView(this);
+                  text.setText("Release asset runtime fixture PASS");
+                  text.setTextSize(20f);
+                  text.setPadding(48, 48, 48, 48);
+                  setContentView(text);
+              }
+          }
+          EOF
+
+          printf '17\n' > "$project/.java-version"
+
+          cat > "$seed/settings.gradle" <<'EOF'
+          rootProject.name = 'WrapperSeed'
+          EOF
+          cat > "$seed/build.gradle" <<'EOF'
+          // Wrapper seed only.
+          EOF
+          (
+            cd "$seed"
+            gradle wrapper --gradle-version 8.7 --distribution-type bin
+          )
+          cp "$seed/gradlew" "$project/gradlew"
+          cp "$seed/gradlew.bat" "$project/gradlew.bat"
+          mkdir -p "$project/gradle"
+          cp -a "$seed/gradle/wrapper" "$project/gradle/wrapper"
+          chmod +x "$project/gradlew"
+
+          echo "FIXTURE_PROJECT=$project" >> "$GITHUB_ENV"
+
+      - name: Install exact fixture SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Build real Debug APK fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$FIXTURE_PROJECT"
+          ./gradlew --no-daemon :app:assembleDebug
+          apk="$FIXTURE_PROJECT/app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$apk"
+          sha256sum "$apk"
+          cp "$apk" "$RUNNER_TEMP/runtime-fixture.apk"
+
+      - name: Create real source ZIP fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$FIXTURE_PROJECT/.gradle" "$FIXTURE_PROJECT/app/build" "$FIXTURE_PROJECT/build"
+          (
+            cd "$RUNNER_TEMP"
+            zip -qr runtime-fixture-source.zip runtime-fixture
+          )
+          unzip -Z1 "$RUNNER_TEMP/runtime-fixture-source.zip" | grep -q 'runtime-fixture/gradlew'
+          unzip -Z1 "$RUNNER_TEMP/runtime-fixture-source.zip" | grep -q 'runtime-fixture/gradle/wrapper/gradle-wrapper.jar'
+          sha256sum "$RUNNER_TEMP/runtime-fixture-source.zip"
+
+      - name: Publish two real prereleases
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA:0:12}"
+          apk_tag="runtime-selftest-apk-$short"
+          zip_tag="runtime-selftest-zip-$short"
+
+          gh release delete "$apk_tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag >/dev/null 2>&1 || true
+          gh release delete "$zip_tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag >/dev/null 2>&1 || true
+
+          gh release create "$apk_tag" "$RUNNER_TEMP/runtime-fixture.apk#runtime-fixture.apk" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title 'Runtime self-test APK asset' \
+            --notes 'Generated on GitHub Actions. Direct APK runtime ingestion fixture.'
+
+          gh release create "$zip_tag" "$RUNNER_TEMP/runtime-fixture-source.zip#runtime-fixture-source.zip" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title 'Runtime self-test ZIP source asset' \
+            --notes 'Generated on GitHub Actions. Source ZIP build-to-runtime ingestion fixture.'
+
+          echo "apk_tag=$apk_tag" >> "$GITHUB_OUTPUT"
+          echo "zip_tag=$zip_tag" >> "$GITHUB_OUTPUT"
+
+          gh release view "$apk_tag" --repo "$GITHUB_REPOSITORY" --json tagName,assets
+          gh release view "$zip_tag" --repo "$GITHUB_REPOSITORY" --json tagName,assets
+
+  test-apk-release-asset:
+    name: Test real APK Release asset
+    needs: prepare-release-assets
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/release-asset-runtime-test.yml
+    with:
+      release_tag: ${{ needs.prepare-release-assets.outputs.apk_tag }}
+      asset_name: runtime-fixture.apk
+
+  test-zip-release-asset:
+    name: Test real ZIP Release asset
+    needs: prepare-release-assets
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/release-asset-runtime-test.yml
+    with:
+      release_tag: ${{ needs.prepare-release-assets.outputs.zip_tag }}
+      asset_name: runtime-fixture-source.zip
