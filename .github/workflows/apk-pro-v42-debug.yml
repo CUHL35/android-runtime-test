@@ -1,4 +1,4 @@
-name: APK PRO v42 Debug
+name: APK PRO W^X Debug
 
 on:
   push:
@@ -37,26 +37,34 @@ jobs:
           test -f "$ANDROID_HOME/platforms/android-37.0/android.jar"
           test -f "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar"
 
-      - name: Stage APK PRO v42 source
+      - name: Stage APK PRO source + W^X fix
         shell: bash
         run: |
           set -euxo pipefail
-          ROOT="$RUNNER_TEMP/apk-pro-v42"
+          ROOT="$RUNNER_TEMP/apk-pro-wxfix"
           DELTA="$RUNNER_TEMP/v42-delta.zip"
           rm -rf "$ROOT" "$DELTA"
           mkdir -p "$ROOT"
           test -f runtime-tests/apk-pro-v35/source/app/build.gradle
           cp -a runtime-tests/apk-pro-v35/source/. "$ROOT/"
           cat runtime-tests/apk-pro-v42-delta/part*.b64 | tr -d '\r\n' | base64 -d > "$DELTA"
-          echo "delta-bytes=$(stat -c%s "$DELTA")"
-          sha256sum "$DELTA"
-          # Delta uploaded through chat had one CRC-bad entry only: ToolchainManager.java.
-          # Extract every other v42 file and keep the known-good baseline ToolchainManager for this debug bootstrap build.
           unzip -oq "$DELTA" -x 'app/src/main/java/com/longdev/apkbuilder/core/ToolchainManager.java' -d "$ROOT"
           rm -rf "$ROOT/release-signing"
-          sed -n '1,40p' "$ROOT/app/build.gradle"
-          test "$(sed -n 's/^[[:space:]]*versionCode[[:space:]]*//p' "$ROOT/app/build.gradle" | head -1)" = "42"
-          test -f "$ROOT/gradle/embedded-toolchain.gradle"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("$ROOT/app/build.gradle")
+          s = p.read_text()
+          s = s.replace("versionCode 42", "versionCode 43")
+          s = s.replace("versionName '42'", "versionName '43'")
+          s = s.replace("minSdk 30", "minSdk 28")
+          s = s.replace("targetSdk 33", "targetSdk 28")
+          p.write_text(s)
+          PY
+          grep -E 'versionCode|versionName|minSdk|targetSdk|compileSdk' "$ROOT/app/build.gradle"
+          grep -q 'versionCode 43' "$ROOT/app/build.gradle"
+          grep -q "versionName '43'" "$ROOT/app/build.gradle"
+          grep -q 'minSdk 28' "$ROOT/app/build.gradle"
+          grep -q 'targetSdk 28' "$ROOT/app/build.gradle"
           echo "ROOT=$ROOT" >> "$GITHUB_ENV"
 
       - name: Build Debug
@@ -64,17 +72,19 @@ jobs:
         run: |
           set -euxo pipefail
           cd "$ROOT"
-          gradle --version
           gradle clean assembleDebug --no-daemon --console=plain --stacktrace
           APK="$(find app/build/outputs/apk/debug -type f -name '*.apk' | head -n1)"
           test -f "$APK"
           mkdir -p "$RUNNER_TEMP/apk-out"
-          cp "$APK" "$RUNNER_TEMP/apk-out/APK-PRO-v42-debug.apk"
-          sha256sum "$RUNNER_TEMP/apk-out/APK-PRO-v42-debug.apk"
+          cp "$APK" "$RUNNER_TEMP/apk-out/APK-PRO-v43-wxfix-debug.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$RUNNER_TEMP/apk-out/APK-PRO-v43-wxfix-debug.apk" | tee "$RUNNER_TEMP/apk-out/badging.txt"
+          grep -q "sdkVersion:'28'" "$RUNNER_TEMP/apk-out/badging.txt"
+          grep -q "targetSdkVersion:'28'" "$RUNNER_TEMP/apk-out/badging.txt"
+          sha256sum "$RUNNER_TEMP/apk-out/APK-PRO-v43-wxfix-debug.apk"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: APK-PRO-v42-debug
-          path: ${{ runner.temp }}/apk-out/APK-PRO-v42-debug.apk
+          name: APK-PRO-v43-wxfix-debug
+          path: ${{ runner.temp }}/apk-out/APK-PRO-v43-wxfix-debug.apk
           if-no-files-found: error
           retention-days: 1
