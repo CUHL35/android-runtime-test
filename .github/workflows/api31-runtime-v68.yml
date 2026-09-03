@@ -1,0 +1,89 @@
+name: API31 runtime v68
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  api31-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Reconstruct test source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat source/v68.part-* > /tmp/v68.b64
+          base64 -d /tmp/v68.b64 > /tmp/v68.tar.xz
+          mkdir -p work
+          tar -xJf /tmp/v68.tar.xz -C work
+          mv work/Tro-Ly-Pro-v68 project
+
+          # Binary payloads are intentionally not committed to GitHub.
+          # Recreate only build placeholders; payload-success paths are reported as unverified.
+          mkdir -p project/app/src/main/res/drawable-nodpi
+          printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' | base64 -d > project/app/src/main/res/drawable-nodpi/ic_vip_logo.png
+          mkdir -p project/app/src/main/assets/utility_apks project/app/src/main/assets/source_archives project/signing
+          : > project/app/src/main/assets/utility_apks/APK-PRO-v45-release.apk
+          : > project/app/src/main/assets/utility_apks/Fixx-Pro-v56-release.apk
+          : > project/app/src/main/assets/source_archives/Fixx-Pro-v56-source.zip
+          : > project/app/src/main/assets/source_archives/DoT-iPhone-iOS26-Failover.zip
+          : > project/app/src/main/assets/source_archives/APK-PRO-v45-source.zip
+          : > project/signing/runtime-test-only.jks
+          cat > project/signing/SIGNING-KEY-INFO.txt <<'EOF'
+          Keystore: runtime-test-only.jks
+          Alias: runtime
+          Store password: runtime-only
+          Key password: runtime-only
+          EOF
+
+      - name: Install Android SDK build packages
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platform-tools' 'platforms;android-37' 'build-tools;36.0.0'
+
+      - name: Pure logic + debug build
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle -p project :app:testPureLogic :app:assembleDebug --stacktrace --no-daemon | tee build.log
+          test -f project/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: API 31 emulator runtime/UI flow
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 31
+          target: google_apis
+          arch: x86_64
+          profile: pixel_4
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash ci/api31_runtime.sh project/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api31-runtime-v68-evidence
+          path: |
+            build.log
+            runtime-results/**
+          if-no-files-found: warn
